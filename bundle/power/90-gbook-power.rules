@@ -1,0 +1,5 @@
+# Galaxy Book 10.6: the charger must not wake the tablet from sleep. Its
+# "online" state was seen dropping out every 11 seconds for an hour on the
+# SM-W627 (2026-11-10); as a wake-up source every such change would end the
+# sleep of a closed tablet. Power button and cover still wake it.
+ACTION=="add|change", SUBSYSTEM=="power_supply", ATTR{type}=="Mains", ATTR{power/wakeup}="disabled"

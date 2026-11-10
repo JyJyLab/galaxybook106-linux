@@ -1,0 +1,14 @@
+#!/bin/sh
+# gbook-audio-check — succeed only on the Galaxy Book 10.6 audio codec
+# (Realtek ALC298, codec subsystem 144d:c150). Used as a guard so that the
+# amplifier initialisation never runs on other hardware.
+f='/proc/asound/card0/codec#0'
+i=0
+while [ ! -e "$f" ] && [ "$i" -lt 50 ]; do
+	sleep 0.2
+	i=$((i + 1))
+done
+[ -e "$f" ] || exit 1
+grep -q '^Codec: Realtek ALC298' "$f" || exit 1
+grep -qi '^Subsystem Id: 0x144dc150' "$f" || exit 1
+exit 0

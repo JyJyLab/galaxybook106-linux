@@ -1,0 +1,16 @@
+# labwc environment for the Xfce Wayland session on the Galaxy Book 10.6
+# Installed as ~/.config/xfce4/labwc/environment
+
+# Korean keyboard cover: Hangul/Hanja keys, right Alt/Ctrl as fallback
+XKB_DEFAULT_LAYOUT=kr
+XKB_DEFAULT_VARIANT=kr104
+XKB_DEFAULT_MODEL=pc105
+
+XCURSOR_THEME=Adwaita
+XCURSOR_SIZE=32
+
+# Input method (fcitx5): X11 clients under Xwayland, and Qt 6 applications
+# (Wayland text-input protocol first, fcitx plugin as fallback).
+# GTK applications use the Wayland text-input protocol without a variable.
+XMODIFIERS=@im=fcitx
+QT_IM_MODULES=wayland;fcitx

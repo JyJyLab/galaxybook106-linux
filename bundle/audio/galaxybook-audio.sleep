@@ -1,0 +1,11 @@
+#!/bin/sh
+# systemd-sleep hook: codec and amplifier state is lost across suspend,
+# re-apply the initialisation on resume (Galaxy Book 10.6 only).
+case "$1/$2" in
+post/*)
+	if /usr/local/bin/gbook-audio-check; then
+		/usr/local/bin/galaxybook-audio-init 0 || true
+	fi
+	;;
+esac
+exit 0

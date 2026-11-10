@@ -1,0 +1,147 @@
+#!/usr/bin/python3
+"""gbook-touchpad-wake - bring the touchpad of the keyboard cover to life after
+the cover was connected to the running tablet.
+
+Seen on the SM-W627 (2026-11-10): after a cold boot the touchpad of the
+Samsung keyboard cover (USB 04e8:a00a) works. When the cover is connected to
+the running tablet, the keyboard works but the touchpad sends nothing, and
+neither re-sending its feature reports (input mode, surface switch, latency;
+also as an off/on change) nor re-binding the driver helps. One sleep/wake
+cycle of the tablet (s2idle) brings it back every time (user, 2 of 2).
+On Windows the cover is installed with HID selective suspend
+(samsungkeyboardcover.inf), so it also goes through USB suspend and resume.
+
+This helper therefore puts the cover through one USB suspend/resume cycle of
+its own (runtime PM: power/control "auto" with no delay until the device is
+suspended, then "on" again), then sends the touchpad settings once more.
+If the cover does not suspend (a key held down, a keyboard LED on), it falls
+back to a USB reset of the cover.
+
+Status: the sleep/wake effect is confirmed; that a USB suspend/resume alone
+has the same effect is not yet confirmed.
+
+Feature reports of the touchpad interface (from its report descriptor):
+  4  input mode             3 = touchpad
+  13 latency mode           0 = normal
+  6  surface/button switch  3 = both on
+"""
+import fcntl
+import glob
+import os
+import sys
+import time
+
+VENDOR, PRODUCT = "04e8", "a00a"
+ON = (bytes([0x0D, 0x00]), bytes([0x04, 0x03]), bytes([0x06, 0x03]))
+USBDEVFS_RESET = 0x5514
+
+
+def log(text):
+    print(text, flush=True)
+
+
+def read(path):
+    try:
+        with open(path) as f:
+            return f.read().strip()
+    except OSError:
+        return ""
+
+
+def write(path, value):
+    with open(path, "w") as f:
+        f.write(value)
+
+
+def usb_device():
+    for dev in glob.glob("/sys/bus/usb/devices/*"):
+        if read(dev + "/idVendor") == VENDOR and read(dev + "/idProduct") == PRODUCT:
+            return dev
+    return None
+
+
+def usb_cycle(dev):
+    """One runtime suspend/resume of the USB device. True if it was suspended."""
+    power = dev + "/power/"
+    control, delay = read(power + "control"), read(power + "autosuspend_delay_ms")
+    before = int(read(power + "runtime_suspended_time") or 0)
+    suspended = False
+    try:
+        write(power + "autosuspend_delay_ms", "0")
+        write(power + "control", "auto")
+        start = time.monotonic()
+        while time.monotonic() - start < 3.0:
+            if read(power + "runtime_status") == "suspended":
+                suspended = True
+                break
+            time.sleep(0.05)
+        if suspended:
+            time.sleep(0.3)       # stay suspended for a moment, like a sleep
+            log("USB suspend after %d ms" % ((time.monotonic() - start) * 1000))
+    finally:
+        write(power + "control", control or "on")
+        if delay:
+            write(power + "autosuspend_delay_ms", delay)
+    if suspended:
+        start = time.monotonic()
+        while time.monotonic() - start < 2.0 and read(power + "runtime_status") != "active":
+            time.sleep(0.05)
+        log("USB resume: %s, suspended time +%d ms" % (
+            read(power + "runtime_status"),
+            int(read(power + "runtime_suspended_time") or 0) - before))
+    return suspended
+
+
+def usb_reset(dev):
+    node = "/dev/bus/usb/%03d/%03d" % (int(read(dev + "/busnum")), int(read(dev + "/devnum")))
+    fd = os.open(node, os.O_WRONLY)
+    try:
+        fcntl.ioctl(fd, USBDEVFS_RESET, 0)
+    finally:
+        os.close(fd)
+    log("USB reset of " + node)
+
+
+def send_on():
+    done = 0
+    for hid in sorted(glob.glob("/sys/bus/hid/devices/0003:04E8:A00A.*")):
+        if os.path.basename(os.path.realpath(hid + "/driver")) != "hid-multitouch":
+            continue
+        for raw in glob.glob(hid + "/hidraw/hidraw*"):
+            node = "/dev/" + os.path.basename(raw)
+            try:
+                fd = os.open(node, os.O_RDWR | os.O_NONBLOCK)
+            except OSError as err:
+                log("%s: %s" % (node, err))
+                continue
+            try:
+                for report in ON:
+                    fcntl.ioctl(fd, 0xC0004806 | (len(report) << 16), bytearray(report))
+                    time.sleep(0.03)
+                done += 1
+            except OSError as err:
+                log("%s: %s" % (node, err))
+            finally:
+                os.close(fd)
+    log("touchpad settings sent" if done else "touchpad interface not found")
+
+
+def main():
+    dev = usb_device()
+    if not dev:
+        log("keyboard cover not connected")
+        return 0
+    try:
+        if not usb_cycle(dev):
+            log("cover did not suspend, using a USB reset")
+            usb_reset(dev)
+            time.sleep(1.0)
+    except OSError as err:
+        log("USB power cycle failed: %s" % err)
+    time.sleep(0.5)
+    send_on()
+    return 0
+
+
+if __name__ == "__main__":
+    sys.exit(main())

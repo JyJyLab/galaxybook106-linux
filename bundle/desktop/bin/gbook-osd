@@ -1,0 +1,48 @@
+#!/bin/sh
+# gbook-osd — change volume or brightness and show the new level on screen.
+# Bound to the hardware volume buttons and the keyboard cover keys in labwc.
+#   gbook-osd volume-up | volume-down | volume-mute | brightness-up | brightness-down
+STEP=5
+
+show() { # show <tag> <percent> <text> <icon>
+	command -v notify-send >/dev/null 2>&1 || return 0
+	notify-send -a gbook-osd -t 1200 -i "$4" \
+		-h "string:x-canonical-private-synchronous:$1" -h "int:value:$2" "$3" >/dev/null 2>&1
+}
+
+volume_now() {
+	# "Volume: 0.55" or "Volume: 0.55 [MUTED]"
+	wpctl get-volume @DEFAULT_AUDIO_SINK@ 2>/dev/null |
+		awk '{printf "%d %s\n", $2 * 100 + 0.5, ($3 == "[MUTED]") ? "muted" : "on"}'
+}
+
+volume_osd() {
+	set -- $(volume_now)
+	[ -n "${1:-}" ] || return 0
+	if [ "${2:-on}" = "muted" ]; then
+		show volume 0 "음소거" audio-volume-muted
+	else
+		show volume "$1" "음량 $1%" audio-volume-high
+	fi
+}
+
+case "${1:-}" in
+volume-up)
+	wpctl set-mute @DEFAULT_AUDIO_SINK@ 0
+	wpctl set-volume -l 1.0 @DEFAULT_AUDIO_SINK@ "${STEP}%+"
+	volume_osd ;;
+volume-down)
+	wpctl set-volume @DEFAULT_AUDIO_SINK@ "${STEP}%-"
+	volume_osd ;;
+volume-mute)
+	wpctl set-mute @DEFAULT_AUDIO_SINK@ toggle
+	volume_osd ;;
+brightness-up|brightness-down)
+	if [ "$1" = brightness-up ]; then brightnessctl -q set "+${STEP}%"; else brightnessctl -q --min-value=250 set "${STEP}%-"; fi
+	pct=$(brightnessctl -m 2>/dev/null | cut -d, -f4 | tr -d '%')
+	[ -n "$pct" ] && show brightness "$pct" "밝기 $pct%" display-brightness-symbolic ;;
+*)
+	echo "usage: gbook-osd {volume-up|volume-down|volume-mute|brightness-up|brightness-down}" >&2
+	exit 2 ;;
+esac
+exit 0

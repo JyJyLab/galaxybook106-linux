@@ -1,0 +1,10 @@
+[Desktop Entry]
+Type=Application
+Name=Rotate Screen
+Name[ko]=화면 90도 회전
+Comment=Rotate the screen by 90 degrees
+Comment[ko]=화면을 90도 회전
+Exec=gbook-display next
+Icon=object-rotate-right
+Terminal=false
+Categories=Settings;

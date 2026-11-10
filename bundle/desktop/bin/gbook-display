@@ -1,0 +1,191 @@
+#!/bin/bash
+# gbook-display — display rotation helper for the Samsung Galaxy Book 10.6
+# under wlroots compositors (labwc) using wlr-randr.
+#
+#   gbook-display init          apply base rotation and scale, sync labwc touch/pen mapping
+#   gbook-display set <orient>  rotate for a sensor orientation
+#                               (normal | left-up | right-up | bottom-up)
+#   gbook-display next          rotate a further 90 degrees (manual)
+#   gbook-display lock | unlock | toggle-lock
+#   gbook-display status
+set -u
+
+CONF_SYS=/etc/gbook/display.conf
+CONF_USER="${XDG_CONFIG_HOME:-$HOME/.config}/gbook/display.conf"
+STATE_DIR="${XDG_CONFIG_HOME:-$HOME/.config}/gbook"
+LOCK_FILE="$STATE_DIR/rotation-lock"
+RUN_DIR="${XDG_RUNTIME_DIR:-/tmp}/gbook"
+CUR_FILE="$RUN_DIR/transform"
+
+OUTPUT=auto
+BASE_TRANSFORM=90
+SCALE=
+OFFSET_NORMAL=0
+OFFSET_LEFT_UP=90
+OFFSET_BOTTOM_UP=180
+OFFSET_RIGHT_UP=270
+AUTOROTATE=1
+# shellcheck disable=SC1090
+[ -r "$CONF_SYS" ] && . "$CONF_SYS"
+# shellcheck disable=SC1090
+[ -r "$CONF_USER" ] && . "$CONF_USER"
+
+log() { echo "gbook-display: $*" >&2; }
+
+# rotation history for troubleshooting (kept small)
+HISTORY="${XDG_STATE_HOME:-$HOME/.local/state}/gbook-display.log"
+record() {
+	mkdir -p "${HISTORY%/*}" 2>/dev/null || return 0
+	if [ "$(stat -c %s "$HISTORY" 2>/dev/null || echo 0)" -gt 100000 ]; then
+		mv -f "$HISTORY" "$HISTORY.old"
+	fi
+	echo "$(date '+%F %T') $*" >>"$HISTORY" 2>/dev/null
+	return 0
+}
+
+notify() {
+	command -v notify-send >/dev/null 2>&1 && notify-send -t 2000 "$1" >/dev/null 2>&1
+	return 0
+}
+
+detect_output() {
+	if [ "$OUTPUT" != "auto" ]; then
+		echo "$OUTPUT"
+		return 0
+	fi
+	local names name
+	names=$(wlr-randr 2>/dev/null | awk '/^[^ \t]/ {print $1}')
+	for name in $names; do
+		case "$name" in
+		eDP-*|DSI-*|LVDS-*) echo "$name"; return 0 ;;
+		esac
+	done
+	name=$(echo "$names" | head -n1)
+	[ -n "$name" ] || return 1
+	echo "$name"
+}
+
+# degrees (0/90/180/270) -> wlr-randr transform name
+transform_name() {
+	case "$(( ($1 % 360 + 360) % 360 ))" in
+	0) echo normal ;;
+	90) echo 90 ;;
+	180) echo 180 ;;
+	270) echo 270 ;;
+	*) return 1 ;;
+	esac
+}
+
+apply_degrees() {
+	local out deg name
+	deg=$(( ($1 % 360 + 360) % 360 ))
+	out=$(detect_output) || { log "no output found (is the compositor running?)"; return 1; }
+	name=$(transform_name "$deg") || { log "invalid transform $deg"; return 1; }
+	mkdir -p "$RUN_DIR"
+	if [ "$(cat "$CUR_FILE" 2>/dev/null)" = "$deg" ]; then
+		return 0
+	fi
+	if wlr-randr --output "$out" --transform "$name"; then
+		echo "$deg" >"$CUR_FILE"
+		record "transform $deg (${GBOOK_REASON:-manual})"
+	else
+		log "wlr-randr failed for $out transform $name"
+		return 1
+	fi
+}
+
+orient_degrees() {
+	local off
+	case "$1" in
+	normal) off=$OFFSET_NORMAL ;;
+	left-up) off=$OFFSET_LEFT_UP ;;
+	bottom-up) off=$OFFSET_BOTTOM_UP ;;
+	right-up) off=$OFFSET_RIGHT_UP ;;
+	*) return 1 ;;
+	esac
+	echo $(( (BASE_TRANSFORM + off) % 360 ))
+}
+
+# Keep the labwc touch/pen mapping pointed at the internal panel.
+sync_labwc_mapping() {
+	local out=$1 rc
+	for rc in "${GBOOK_LABWC_RC:-}" \
+		"${XDG_CONFIG_HOME:-$HOME/.config}/xfce4/labwc/rc.xml" \
+		"${XDG_CONFIG_HOME:-$HOME/.config}/labwc/rc.xml"; do
+		[ -n "$rc" ] && [ -w "$rc" ] || continue
+		grep -q 'mapToOutput="' "$rc" || continue
+		if grep -q "mapToOutput=\"$out\"" "$rc" &&
+			! grep 'mapToOutput="' "$rc" | grep -qv "mapToOutput=\"$out\""; then
+			continue
+		fi
+		sed -i "s/mapToOutput=\"[^\"]*\"/mapToOutput=\"$out\"/g" "$rc"
+		log "updated touch/pen mapping to $out in $rc"
+		if [ -n "${LABWC_PID:-}" ]; then
+			kill -HUP "$LABWC_PID" 2>/dev/null
+		else
+			pkill -HUP -x -u "$(id -u)" labwc 2>/dev/null
+		fi
+	done
+	return 0
+}
+
+cmd_init() {
+	local out
+	out=$(detect_output) || { log "no output found"; return 1; }
+	if [ -n "${SCALE:-}" ]; then
+		wlr-randr --output "$out" --scale "$SCALE" || log "could not set scale $SCALE"
+	fi
+	mkdir -p "$RUN_DIR"
+	rm -f "$CUR_FILE"
+	GBOOK_REASON=init apply_degrees "$BASE_TRANSFORM"
+	sync_labwc_mapping "$out"
+}
+
+cmd_set() {
+	local deg
+	deg=$(orient_degrees "${1:-}") || { log "unknown orientation '${1:-}'"; return 2; }
+	GBOOK_REASON="sensor ${1:-}" apply_degrees "$deg"
+}
+
+cmd_next() {
+	local cur
+	cur=$(cat "$CUR_FILE" 2>/dev/null || echo "$BASE_TRANSFORM")
+	GBOOK_REASON="rotate button" apply_degrees $(( cur + 90 ))
+}
+
+cmd_lock() {
+	mkdir -p "$STATE_DIR" && : >"$LOCK_FILE" && notify "화면 회전 잠금"
+	record "rotation lock on"
+}
+
+cmd_unlock() {
+	local last
+	rm -f "$LOCK_FILE"
+	notify "화면 회전 잠금 해제"
+	record "rotation lock off"
+	# catch up with the orientation seen while locked
+	last=$(cat "$RUN_DIR/sensor-orientation" 2>/dev/null)
+	if [ -n "$last" ] && [ "$AUTOROTATE" = "1" ]; then
+		cmd_set "$last"
+	fi
+	return 0
+}
+
+case "${1:-}" in
+init) cmd_init ;;
+set) cmd_set "${2:-}" ;;
+next) cmd_next ;;
+lock) cmd_lock ;;
+unlock) cmd_unlock ;;
+toggle-lock)
+	if [ -e "$LOCK_FILE" ]; then cmd_unlock; else cmd_lock; fi ;;
+status)
+	echo "output=$(detect_output 2>/dev/null || echo '?')"
+	echo "base_transform=$BASE_TRANSFORM"
+	echo "current=$(cat "$CUR_FILE" 2>/dev/null || echo '?')"
+	echo "autorotate=$AUTOROTATE"
+	if [ -e "$LOCK_FILE" ]; then echo "locked=yes"; else echo "locked=no"; fi ;;
+*)
+	echo "usage: gbook-display {init|set <normal|left-up|right-up|bottom-up>|next|lock|unlock|toggle-lock|status}" >&2
+	exit 2 ;;
+esac

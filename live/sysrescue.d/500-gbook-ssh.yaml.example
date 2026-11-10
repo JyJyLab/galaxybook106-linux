@@ -1,0 +1,20 @@
+# Galaxy Book 10.6 installer settings for a personal root image (GB_PUBLIC=0):
+# the live system accepts SSH logins with your key, so the installation can be
+# run remotely. Copy to 500-gbook.yaml and put your public key in.
+global:
+    nofirewall: true
+    copytoram: false
+
+autorun:
+    ar_nowait: true
+    exec:
+        100:
+            path: "bash"
+            parameters:
+                - "/run/archiso/bootmnt/autorun/gbook-live.sh"
+            wait: never
+
+sysconfig:
+    timezone: "Asia/Seoul"
+    authorized_keys:
+        "you@your-pc": "ssh-ed25519 AAAA... you@your-pc"

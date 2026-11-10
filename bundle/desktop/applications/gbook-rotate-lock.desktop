@@ -1,0 +1,10 @@
+[Desktop Entry]
+Type=Application
+Name=Rotation Lock
+Name[ko]=화면 회전 잠금
+Comment=Toggle automatic screen rotation
+Comment[ko]=자동 화면 회전 켜기/끄기
+Exec=gbook-display toggle-lock
+Icon=rotation-locked-symbolic
+Terminal=false
+Categories=Settings;

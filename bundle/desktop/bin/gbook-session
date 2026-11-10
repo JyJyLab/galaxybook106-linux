@@ -1,0 +1,27 @@
+#!/bin/sh
+# gbook-session — start the Xfce Wayland session (labwc) from greetd.
+# Uses the systemd user bus instead of a private one so that PipeWire and the
+# desktop portals share the session bus with the desktop.
+# greetd starts the session with a clean environment and its PAM file does not
+# read the locale (no pam_env readenv): take the language from the system
+# setting, otherwise the desktop comes up in English
+if [ -z "${LANG:-}" ]; then
+	for f in /etc/locale.conf /etc/default/locale; do
+		[ -r "$f" ] || continue
+		set -a
+		# shellcheck disable=SC1090
+		. "$f"
+		set +a
+		break
+	done
+fi
+export XDG_SESSION_TYPE=wayland
+export XDG_CURRENT_DESKTOP=XFCE
+if [ -z "${DBUS_SESSION_BUS_ADDRESS:-}" ] && [ -n "${XDG_RUNTIME_DIR:-}" ] && [ -S "$XDG_RUNTIME_DIR/bus" ]; then
+	export DBUS_SESSION_BUS_ADDRESS="unix:path=$XDG_RUNTIME_DIR/bus"
+fi
+# keep the session messages for troubleshooting (previous run in .old)
+LOGDIR="${XDG_STATE_HOME:-$HOME/.local/state}"
+mkdir -p "$LOGDIR"
+[ -f "$LOGDIR/gbook-session.log" ] && mv -f "$LOGDIR/gbook-session.log" "$LOGDIR/gbook-session.log.old"
+exec startxfce4 --wayland >"$LOGDIR/gbook-session.log" 2>&1

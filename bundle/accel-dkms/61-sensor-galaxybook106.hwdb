@@ -1,0 +1,16 @@
+# Samsung Galaxy Book 10.6 (SM-W620, product "Galaxy Book 10.6") and
+# Galaxy Book 10.6 LTE (SM-W627, product "Galaxy Book 10.6 LTE"):
+# K2HH accelerometer (ACPI SAM0201)
+#
+# Matrix relative to the casing in its natural landscape position (keyboard
+# cover at the bottom), SM-W627, 2026-11-10. Standing in that position the
+# sensor reads x ~ 0, y ~ -0.8 g, z ~ +0.6 g: y already has the sign that
+# iio-sensor-proxy calls "normal", z has the opposite sign of the expected
+# frame, and with the identity matrix the two portrait positions came out
+# swapped on the device (picture upside down in portrait, right in both
+# landscape positions). The sensor is therefore turned 180 degrees around
+# its y axis: x and z are negated.
+# (The firmware ROTM tables are relative to the portrait-native panel and must
+# not be used here.)
+sensor:modalias:acpi:SAM0201*:dmi:*:svnSAMSUNGELECTRONICSCO.,LTD.:pnGalaxyBook10.6*
+ ACCEL_MOUNT_MATRIX=-1, 0, 0; 0, 1, 0; 0, 0, -1

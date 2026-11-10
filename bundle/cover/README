@@ -1,0 +1,15 @@
+cover/ — keyboard cover touchpad (backlog, not installed by "install.sh all")
+
+Problem (SM-W627, 2026-11-10): when the keyboard cover is connected to the
+running tablet, its keyboard works but its touchpad sends nothing. After a cold
+boot, or after one sleep/wake cycle of the tablet (s2idle), the touchpad works.
+
+Tried without effect: re-sending the touchpad feature reports (input mode,
+surface switch, latency; also as an off/on change), re-binding the driver, a
+USB reset, a 0.3 s USB runtime suspend/resume of the cover (remote wakeup on).
+
+gbook-touchpad-wake (+ .service, 90-gbook-cover.rules) is the last attempt:
+USB runtime suspend/resume of the cover, USB reset as fallback. Install with
+"install.sh cover" only for further experiments.
+
+Workaround: press the power button (sleep), press it again (wake).

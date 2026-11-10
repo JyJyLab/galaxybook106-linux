@@ -1,0 +1,16 @@
+# base system
+linux-image-amd64 linux-headers-amd64 grub-efi-amd64 efibootmgr systemd-sysv systemd-timesyncd dbus-user-session sudo openssh-server locales tzdata ca-certificates curl wget nano less bash-completion pciutils usbutils kmod initramfs-tools zstd e2fsprogs dosfstools parted
+# firmware and hardware support
+firmware-atheros firmware-intel-graphics firmware-misc-nonfree intel-microcode thermald zram-tools dkms build-essential rtkit intel-media-va-driver vainfo
+# network and bluetooth
+network-manager network-manager-applet wpasupplicant bluez blueman rfkill
+# audio
+pipewire pipewire-pulse pipewire-alsa wireplumber alsa-utils alsa-tools pavucontrol xfce4-pulseaudio-plugin python3
+# compositor and session
+labwc wlr-randr xwayland swaylock wvkbd wl-clipboard greetd iio-sensor-proxy brightnessctl libnotify-bin python3-gi gir1.2-gtk-3.0 xdg-desktop-portal xdg-desktop-portal-wlr xdg-desktop-portal-gtk
+# Xfce desktop
+xfce4-session xfce4-panel xfdesktop4 xfce4-settings xfce4-terminal thunar thunar-volman xfce4-appfinder xfce4-power-manager xfce4-power-manager-plugins xfce4-notifyd xfce4-whiskermenu-plugin mousepad ristretto gvfs udisks2 polkitd xfce-polkit adwaita-icon-theme desktop-base
+# Korean input and fonts
+fcitx5 fcitx5-hangul fcitx5-frontend-gtk3 fcitx5-frontend-gtk4 fcitx5-frontend-qt6 fcitx5-config-qt im-config fonts-noto-cjk fonts-noto-core fonts-noto-color-emoji fonts-nanum
+# applications and diagnostics
+firefox-esr firefox-esr-l10n-ko drm-info evtest libinput-tools acpica-tools rsync grim

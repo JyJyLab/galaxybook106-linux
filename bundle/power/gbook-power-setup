@@ -1,0 +1,16 @@
+#!/bin/sh
+# gbook-power-setup — leave the power button and the cover (lid switch) to
+# systemd-logind. Run as the desktop user inside the Xfce session.
+#
+# On Wayland xfce4-power-manager cannot see these keys, but by default it
+# still tells logind not to handle them; the power button and closing the
+# cover then do nothing. It also must not lock the screen before sleeping
+# while the account has no password.
+: "${XDG_RUNTIME_DIR:=/run/user/$(id -u)}"
+export XDG_RUNTIME_DIR
+export DBUS_SESSION_BUS_ADDRESS="${DBUS_SESSION_BUS_ADDRESS:-unix:path=$XDG_RUNTIME_DIR/bus}"
+q() { xfconf-query -c xfce4-power-manager -p "/xfce4-power-manager/$1" -n -t bool -s "$2"; }
+for key in power-key suspend-key hibernate-key lid-switch; do
+	q "logind-handle-$key" true || exit 1
+done
+q lock-screen-suspend-hibernate false

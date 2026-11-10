@@ -1,0 +1,23 @@
+#!/bin/sh
+# gbook-imgu-identity — take the Intel IPU3 imaging unit (ImgU, PCI 8086:1919)
+# out of IOMMU translation before its driver binds.
+#
+# With DMA remapping on, the ipu3-imgu driver makes the unit read memory that
+# is not mapped for it (DMAR "PTE Read access is not set" at power-up) and the
+# whole machine hangs (Galaxy Book 10.6, kernel 7.2, 2026-11-10). The unit is
+# alone in its IOMMU group; an identity domain for that group alone keeps the
+# protection for every other device.
+#
+# Called from /etc/modprobe.d/gbook-imgu.conf before ipu3_imgu is loaded.
+for dev in /sys/bus/pci/devices/*; do
+	[ "$(cat "$dev/vendor" 2>/dev/null)" = 0x8086 ] || continue
+	[ "$(cat "$dev/device" 2>/dev/null)" = 0x1919 ] || continue
+	[ -e "$dev/iommu_group" ] || exit 0          # no IOMMU in use
+	[ -e "$dev/driver" ] && exit 0                # already bound, too late
+	group=$(readlink -f "$dev/iommu_group")
+	if [ "$(cat "$group/type" 2>/dev/null)" != identity ]; then
+		echo identity >"$group/type" 2>/dev/null ||
+			echo "gbook-imgu-identity: could not set identity domain for $(basename "$dev")" >&2
+	fi
+done
+exit 0

@@ -1,0 +1,4 @@
+# Samsung keyboard cover (USB 04e8:a00a): two seconds after one of its HID
+# interfaces appears, put it through one USB suspend/resume (gbook-touchpad-wake
+# picks the touchpad interface itself).
+ACTION=="add", SUBSYSTEM=="hidraw", KERNELS=="0003:04E8:A00A.*", TAG+="systemd", ENV{SYSTEMD_WANTS}+="gbook-touchpad-wake.service"

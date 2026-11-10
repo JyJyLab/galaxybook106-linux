@@ -1,0 +1,8 @@
+[Desktop Entry]
+Type=Application
+Name=Galaxy Book panel setup
+Comment=Add the tablet launchers, volume and battery items to the Xfce panel (first login only)
+Exec=/usr/local/bin/gbook-panel-setup --once
+OnlyShowIn=XFCE;
+NoDisplay=true
+Terminal=false

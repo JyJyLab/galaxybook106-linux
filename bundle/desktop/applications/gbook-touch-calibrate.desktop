@@ -1,0 +1,10 @@
+[Desktop Entry]
+Type=Application
+Name=Touch calibration
+Name[ko]=터치 보정
+Comment=Check the touchscreen orientation with one tap and correct it
+Comment[ko]=화면의 원을 한 번 눌러 터치 방향을 확인하고 바로잡음
+Exec=gbook-touch-calibrate
+Icon=input-tablet
+Terminal=false
+Categories=Settings;HardwareSettings;

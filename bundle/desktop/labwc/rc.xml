@@ -1,0 +1,103 @@
+<?xml version="1.0"?>
+<!--
+  labwc configuration for the Xfce Wayland session on the Samsung Galaxy Book 10.6.
+  Derived from /usr/share/xfce4/labwc/labwc-rc.xml (Xfce 4.20) with additions:
+  touchscreen/S Pen bound to the internal panel (with the 180 degree
+  corrections of the SM-W627), brightness and volume keys with on-screen display.
+  Installed as ~/.config/xfce4/labwc/rc.xml
+-->
+<labwc_config>
+
+  <placement>
+    <policy>automatic</policy>
+  </placement>
+
+  <theme>
+    <name>Adwaita</name>
+    <cornerRadius>8</cornerRadius>
+    <font name="sans" size="10"/>
+  </theme>
+
+  <desktops number="4" />
+
+  <!--
+    Bind the touchscreen and the S Pen to the internal panel. A mapped device
+    follows the rotation of that output, which keeps touch and picture aligned.
+    gbook-display rewrites the output name here if the panel is not eDP-1.
+
+    No deviceName attribute on purpose: labwc 0.20 stores deviceName="" as an
+    empty name that matches no device, the touchscreen then stays unmapped and
+    its coordinates do not rotate with the screen (seen on the device as touch
+    positions turned by 90 degrees). Without the attribute this entry is the
+    default for every touchscreen.
+  -->
+  <touch mapToOutput="eDP-1" mouseEmulation="no" />
+
+  <!-- rotate="180": on the SM-W627 the S Pen digitizer is mounted upside down
+       relative to the panel (the pointer appeared mirrored through the centre) -->
+  <tablet mapToOutput="eDP-1" rotate="180" mouseEmulation="no">
+    <map button="Tip" to="Left" />
+    <map button="Stylus" to="Right" />
+    <map button="Stylus2" to="Middle" />
+  </tablet>
+
+  <!-- the touchscreen reports coordinates rotated by 180 degrees relative to
+       the panel scanout on this unit (SM-W627), like the S Pen: rotate them
+       back. gbook-touch-calibrate checks this with one tap and switches the
+       matrix between "-1 0 1 0 -1 1" (180 degrees) and "1 0 0 0 1 0". -->
+  <libinput>
+    <device category="touch">
+      <calibrationMatrix>-1 0 1 0 -1 1</calibrationMatrix>
+    </device>
+  </libinput>
+
+  <keyboard>
+    <default/>
+    <keybind key="W-Return">
+      <action name="Execute" command="xfce4-terminal"/>
+    </keybind>
+    <keybind key="W-F4">
+      <action name="None"/>
+    </keybind>
+
+    <numlock>off</numlock>
+
+    <keybind key="XF86_AudioLowerVolume">
+      <action name="Execute" command="gbook-osd volume-down" />
+    </keybind>
+    <keybind key="XF86_AudioRaiseVolume">
+      <action name="Execute" command="gbook-osd volume-up" />
+    </keybind>
+    <keybind key="XF86_AudioMute">
+      <action name="Execute" command="gbook-osd volume-mute" />
+    </keybind>
+    <keybind key="XF86_MonBrightnessUp">
+      <action name="Execute" command="gbook-osd brightness-up" />
+    </keybind>
+    <keybind key="XF86_MonBrightnessDown">
+      <action name="Execute" command="gbook-osd brightness-down" />
+    </keybind>
+    <keybind key="W-q">
+      <action name="Close" />
+    </keybind>
+    <keybind key="A-Tab">
+      <action name="NextWindow" />
+    </keybind>
+    <keybind key="W-Tab">
+      <action name="ToggleMaximize" />
+    </keybind>
+    <keybind key="W-1">
+      <action name="GoToDesktop" to="1" />
+    </keybind>
+    <keybind key="W-2">
+      <action name="GoToDesktop" to="2" />
+    </keybind>
+    <keybind key="W-3">
+      <action name="GoToDesktop" to="3" />
+    </keybind>
+    <keybind key="W-4">
+      <action name="GoToDesktop" to="4" />
+    </keybind>
+  </keyboard>
+
+</labwc_config>

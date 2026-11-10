@@ -1,0 +1,229 @@
+diff -ruN wvkbd-0.15/keyboard.c wvkbd-0.15-gbook/keyboard.c
+--- wvkbd-0.15/keyboard.c	2024-05-04 17:42:12.000000000 +0000
++++ wvkbd-0.15-gbook/keyboard.c	2026-11-10 11:51:32.072164634 +0000
+@@ -42,6 +42,39 @@
+     kbd_draw_layout(kb);
+ }
+ 
++/* Show the Korean or the Latin labels on the alphabetical layer. Both layers
++ * send the same key codes; the input method (fcitx5) does the composing, so
++ * this only has to follow the state of the input method. Returns true when
++ * the layout on screen changed and has to be drawn again. */
++bool
++kbd_set_language(struct kbd *kb, bool korean)
++{
++    enum layout_id to_id = korean ? Korean : Full;
++    enum layout_id from_id = korean ? Full : Korean;
++    struct layout *from = &kb->layouts[from_id], *to = &kb->layouts[to_id];
++    enum layout_id *lists[2] = {kb->layers, kb->landscape_layers};
++    bool changed = false;
++
++    kb->korean = korean;
++    for (int n = 0; n < 2; n++) {
++        if (!lists[n])
++            continue;
++        for (size_t i = 0; lists[n][i] != NumLayouts; i++) {
++            if (lists[n][i] == from_id)
++                lists[n][i] = to_id;
++        }
++    }
++    if (kb->last_abc_layout == from)
++        kb->last_abc_layout = to;
++    if (kb->prevlayout == from)
++        kb->prevlayout = to;
++    if (kb->layout == from) {
++        kb->layout = to;
++        changed = true;
++    }
++    return changed;
++}
++
+ void
+ kbd_next_layer(struct kbd *kb, struct key *k, bool invert)
+ {
+@@ -304,6 +337,12 @@
+         if (kb->compose >= 2) {
+             kb->compose = 0;
+             kbd_switch_layout(kb, kb->last_abc_layout, kb->last_abc_index);
++        } else if (kb->last_press->type == Code &&
++                   kb->last_press->code == KEY_HANGEUL) {
++            // Hangul/English key: change the labels at once; a controller
++            // that watches the input method corrects them if it disagrees
++            kbd_set_language(kb, !kb->korean);
++            kbd_draw_layout(kb);
+         } else if (unlatch_shift) {
+             kbd_draw_layout(kb);
+         } else {
+diff -ruN wvkbd-0.15/keyboard.h wvkbd-0.15-gbook/keyboard.h
+--- wvkbd-0.15/keyboard.h	2024-05-04 17:42:12.000000000 +0000
++++ wvkbd-0.15-gbook/keyboard.h	2026-11-10 11:51:32.072009479 +0000
+@@ -101,6 +101,7 @@
+ 	double scale;
+ 	double preferred_scale, preferred_fractional_scale;
+ 	bool landscape;
++	bool korean; // the first layer shows the Korean labels
+ 	uint8_t mods;
+ 	uint8_t compose;
+ 	struct key *last_press;
+@@ -144,6 +145,7 @@
+ double kbd_get_row_length(struct key *k);
+ void kbd_next_layer(struct kbd *kb, struct key *k, bool invert);
+ void kbd_switch_layout(struct kbd *kb, struct layout *l, size_t layer_index);
++bool kbd_set_language(struct kbd *kb, bool korean);
+ 
+ void create_and_upload_keymap(struct kbd *kb, const char *name,
+                               uint32_t comp_unichr, uint32_t comp_shift_unichr);
+diff -ruN wvkbd-0.15/layout.mobintl.h wvkbd-0.15-gbook/layout.mobintl.h
+--- wvkbd-0.15/layout.mobintl.h	2024-05-04 17:42:12.000000000 +0000
++++ wvkbd-0.15-gbook/layout.mobintl.h	2026-11-10 11:51:32.071744647 +0000
+@@ -22,6 +22,7 @@
+ 	Greek,
+ 	Georgian,
+ 	Hebrew,
++	Korean,
+ 	Emoji,
+ 	Nav,
+ 	Landscape,
+@@ -68,7 +69,7 @@
+ 	NumLayouts,
+ };
+ 
+-static struct key keys_full[], keys_full_wide[], keys_special[], keys_specialpad[], keys_simple[],
++static struct key keys_full[], keys_korean[], keys_full_wide[], keys_special[], keys_specialpad[], keys_simple[],
+   keys_cyrillic[], keys_arabic[], keys_persian[], keys_georgian[], keys_greek[], keys_hebrew[],
+   keys_emoji[], keys_nav[], keys_landscape[], keys_landscape_special[], keys_compose_a[],
+   keys_compose_e[], keys_compose_y[], keys_compose_u[], keys_compose_i[],
+@@ -98,6 +99,8 @@
+   [Greek] = {keys_greek, "greek", "greek", true},
+   [Georgian] = {keys_georgian, "georgian", "georgian", true},
+   [Hebrew] = {keys_hebrew, "hebrew", "hebrew", true},
++  /* Korean (2-set) labels on the latin keymap: the input method composes the syllables */
++  [Korean] = {keys_korean, "latin", "korean", true},
+   [Emoji] = {keys_emoji, "latin", "emoji", false},
+   [Nav] = {keys_nav, "latin", "nav", false},
+   [Landscape] = {keys_landscape, "latin", "landscape", true},
+@@ -234,13 +237,87 @@
+   {"", "", 0.0, EndRow},
+ 
+   {"⌨͕", "⌨͔", 1.5, NextLayer, .scheme = 1},
++  {"한/영", "한/영", 1.0, Code, KEY_HANGEUL, .scheme = 1},
+   {"Cmp", "Cmp", 1.0, Compose, .scheme = 1},
+   {",", "'", 1.0, Code, KEY_COMMA, &layouts[ComposeMath]},
+-  {"", "Tab", 4.0, Code, KEY_SPACE},
++  {"", "Tab", 3.0, Code, KEY_SPACE},
+   {".", "?", 1.0, Code, KEY_DOT, &layouts[ComposePunctuation]},
+   {"Enter", "Enter", 1.5, Code, KEY_ENTER, .scheme = 1},
+ 
+   /* end of layout */
++  {"", "", 0.0, Last},
++};
++
++static struct key keys_korean[] = {
++  {"Esc", "Esc", 1.0, Code, KEY_ESC, .scheme = 1},
++  {"Ctr", "Ctr", 1.0, Mod, Ctrl, .scheme = 1},
++  {"↑", "↑", 1.0, Code, KEY_UP, .scheme = 1},
++  {"↓", "↓", 1.0, Code, KEY_DOWN, .scheme = 1},
++  {"←", "←", 1.0, Code, KEY_LEFT, .scheme = 1},
++  {"→", "→", 1.0, Code, KEY_RIGHT, .scheme = 1},
++  {"'", "\"", 1.0, Code, KEY_APOSTROPHE},
++  {"-", "_", 1.0, Code, KEY_MINUS},
++  {"/", ">", 1.0, Code, KEY_SLASH},
++  {"Tab", "Tab", 1.0, Code, KEY_TAB, .scheme = 1},
++  {"", "", 0.0, EndRow},
++
++  {"1", "!", 1.0, Code, KEY_1},
++  {"2", "@", 1.0, Code, KEY_2},
++  {"3", "#", 1.0, Code, KEY_3},
++  {"4", "$", 1.0, Code, KEY_4},
++  {"5", "%", 1.0, Code, KEY_5},
++  {"6", "^", 1.0, Code, KEY_6},
++  {"7", "&", 1.0, Code, KEY_7},
++  {"8", "*", 1.0, Code, KEY_8},
++  {"9", "(", 1.0, Code, KEY_9},
++  {"0", ")", 1.0, Code, KEY_0},
++  {"", "", 0.0, EndRow},
++
++  {"ㅂ", "ㅃ", 1.0, Code, KEY_Q},
++  {"ㅈ", "ㅉ", 1.0, Code, KEY_W},
++  {"ㄷ", "ㄸ", 1.0, Code, KEY_E},
++  {"ㄱ", "ㄲ", 1.0, Code, KEY_R},
++  {"ㅅ", "ㅆ", 1.0, Code, KEY_T},
++  {"ㅛ", "ㅛ", 1.0, Code, KEY_Y},
++  {"ㅕ", "ㅕ", 1.0, Code, KEY_U},
++  {"ㅑ", "ㅑ", 1.0, Code, KEY_I},
++  {"ㅐ", "ㅒ", 1.0, Code, KEY_O},
++  {"ㅔ", "ㅖ", 1.0, Code, KEY_P},
++  {"", "", 0.0, EndRow},
++
++  {"", "", 0.5, Pad},
++  {"ㅁ", "ㅁ", 1.0, Code, KEY_A},
++  {"ㄴ", "ㄴ", 1.0, Code, KEY_S},
++  {"ㅇ", "ㅇ", 1.0, Code, KEY_D},
++  {"ㄹ", "ㄹ", 1.0, Code, KEY_F},
++  {"ㅎ", "ㅎ", 1.0, Code, KEY_G},
++  {"ㅗ", "ㅗ", 1.0, Code, KEY_H},
++  {"ㅓ", "ㅓ", 1.0, Code, KEY_J},
++  {"ㅏ", "ㅏ", 1.0, Code, KEY_K},
++  {"ㅣ", "ㅣ", 1.0, Code, KEY_L},
++  {"", "", 0.5, Pad},
++  {"", "", 0.0, EndRow},
++
++  {"⇧", "⇫", 1.5, Mod, Shift, .scheme = 1},
++  {"ㅋ", "ㅋ", 1.0, Code, KEY_Z},
++  {"ㅌ", "ㅌ", 1.0, Code, KEY_X},
++  {"ㅊ", "ㅊ", 1.0, Code, KEY_C},
++  {"ㅍ", "ㅍ", 1.0, Code, KEY_V},
++  {"ㅠ", "ㅠ", 1.0, Code, KEY_B},
++  {"ㅜ", "ㅜ", 1.0, Code, KEY_N},
++  {"ㅡ", "ㅡ", 1.0, Code, KEY_M},
++  {"⌫", "⌫", 1.5, Code, KEY_BACKSPACE, .scheme = 1},
++  {"", "", 0.0, EndRow},
++
++  {"⌨͕", "⌨͔", 1.5, NextLayer, .scheme = 1},
++  {"한/영", "한/영", 1.0, Code, KEY_HANGEUL, .scheme = 1},
++  {"한자", "한자", 1.0, Code, KEY_HANJA, .scheme = 1},
++  {",", "'", 1.0, Code, KEY_COMMA},
++  {"", "Tab", 3.0, Code, KEY_SPACE},
++  {".", "?", 1.0, Code, KEY_DOT},
++  {"Enter", "Enter", 1.5, Code, KEY_ENTER, .scheme = 1},
++
++  /* end of layout */
+   {"", "", 0.0, Last},
+ };
+ 
+diff -ruN wvkbd-0.15/main.c wvkbd-0.15-gbook/main.c
+--- wvkbd-0.15/main.c	2024-05-04 17:42:12.000000000 +0000
++++ wvkbd-0.15-gbook/main.c	2026-11-10 11:51:32.072323535 +0000
+@@ -684,6 +684,7 @@
+     fprintf(stderr, "  -R [int]    - Rounding radius in pixels\n");
+     fprintf(stderr, "  --fn [font] - Set font (e.g: DejaVu Sans 20)\n");
+     fprintf(stderr, "  --hidden    - Start hidden (send SIGUSR2 to show)\n");
++    fprintf(stderr, "  (signals: SIGRTMIN+1 Latin labels, SIGRTMIN+2 Korean labels)\n");
+     fprintf(
+         stderr,
+         "  --alpha [int]          - Set alpha value for all colors [0-255]\n");
+@@ -1067,6 +1068,8 @@
+     sigaddset(&signal_mask, SIGUSR1);
+     sigaddset(&signal_mask, SIGUSR2);
+     sigaddset(&signal_mask, SIGRTMIN);
++    sigaddset(&signal_mask, SIGRTMIN + 1); // Latin labels
++    sigaddset(&signal_mask, SIGRTMIN + 2); // Korean labels
+     sigaddset(&signal_mask, SIGPIPE);
+     if (sigprocmask(SIG_BLOCK, &signal_mask, NULL) == -1) {
+         die("Failed to disable handled signals: %d\n", errno);
+@@ -1101,6 +1104,15 @@
+                 show();
+             else if (si.ssi_signo == SIGRTMIN)
+                 toggle_visibility();
++            else if (si.ssi_signo == SIGRTMIN + 1 ||
++                     si.ssi_signo == SIGRTMIN + 2) {
++                if (kbd_set_language(&keyboard,
++                                     si.ssi_signo == SIGRTMIN + 2) &&
++                    layer_surface && !hidden) {
++                    kbd_draw_layout(&keyboard);
++                    drwsurf_flip(&draw_surf);
++                }
++            }
+             else if (si.ssi_signo == SIGPIPE)
+                 pipewarn();
+         }

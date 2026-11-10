@@ -1,0 +1,246 @@
+#!/usr/bin/python3
+"""gbook-osk-auto - automatic on-screen keyboard for the tablet without its
+keyboard cover.
+
+While no hardware keyboard is connected, the on-screen keyboard (gbook-osk)
+is shown when a text field gets the input focus and hidden when the focus
+leaves it. With a hardware keyboard connected nothing happens; the panel
+button keeps working in both cases.
+
+The focus state comes from fcitx5, the input method of the session: its
+DebugInfo call lists every input context with "focus:0" or "focus:1".
+(The virtual keyboard interface of fcitx5 cannot be used with wvkbd: fcitx5
+leaves that mode at the first key that does not come from its own D-Bus
+backend, and wvkbd types through the compositor.)
+
+    gbook-osk-auto [--assume-detached] [--verbose]
+
+The same program keeps the labels of the on-screen keyboard (wvkbd-gbook) in
+step with the input method: Korean labels while fcitx5 is in "hangul",
+Latin labels otherwise (signals SIGRTMIN+2 / SIGRTMIN+1).
+
+State changes are written to ~/.local/state/gbook-osk-auto.log.
+"""
+import argparse
+import glob
+import os
+import signal
+import subprocess
+import sys
+import time
+
+import gi
+
+gi.require_version("Gio", "2.0")
+from gi.repository import Gio, GLib  # noqa: E402
+
+KEY_ENTER, KEY_A, KEY_Z, KEY_SPACE = 28, 30, 44, 57
+BUS_I8042 = 0x11
+FOCUS_POLL_MS = 400          # only while no hardware keyboard is connected
+KEYBOARD_POLL_S = 2
+HIDE_AFTER_POLLS = 2         # focus must be gone this long before hiding
+LANGUAGE_REPEAT_POLLS = 3    # send the label language again every third poll
+OSK_NAME = "wvkbd-gbook"     # the build that knows the label signals
+LOG_LIMIT = 200 * 1024
+
+
+def hardware_keyboards():
+    """Names of input devices that have letter keys (cover, USB, Bluetooth).
+
+    The PS/2 keyboard of the embedded controller ("AT Translated Set 2
+    keyboard", bus type 0x11) is always there on this tablet although no
+    keys are wired to it, so it does not count.
+    """
+    names = []
+    for path in glob.glob("/sys/class/input/input*/capabilities/key"):
+        device = os.path.dirname(os.path.dirname(path))
+        try:
+            with open(device + "/id/bustype") as f:
+                if int(f.read().strip(), 16) == BUS_I8042:
+                    continue
+            with open(path) as f:
+                words = f.read().split()
+        except (OSError, ValueError):
+            continue
+        bits = 0
+        for word in words:               # most significant word first
+            bits = (bits << 64) | int(word, 16)
+        if all(bits >> key & 1 for key in (KEY_ENTER, KEY_A, KEY_Z, KEY_SPACE)):
+            try:
+                with open(device + "/name") as f:
+                    names.append(f.read().strip())
+            except OSError:
+                names.append("?")
+    return sorted(names)
+
+
+class AutoKeyboard:
+    def __init__(self, assume_detached, verbose):
+        self.assume_detached = assume_detached
+        self.verbose = verbose
+        state = os.environ.get("XDG_STATE_HOME") or os.path.expanduser("~/.local/state")
+        self.log_path = state + "/gbook-osk-auto.log"
+        self.bus = Gio.bus_get_sync(Gio.BusType.SESSION, None)
+        self.keyboards = None        # last seen list of hardware keyboards
+        self.focus = False           # a text field has the input focus
+        self.shown = False           # this program has shown the keyboard
+        self.misses = 0
+        self.focus_timer = 0
+        self.osk_pid = 0             # running wvkbd-gbook, 0 = not looked up
+        self.osk_checked = 0.0
+        self.korean = None           # label language last sent to it
+        self.polls = 0
+        self.keyboard_polls = 0
+        self.log("start" + (" (assume detached)" if assume_detached else ""))
+        self.check_keyboards()
+        GLib.timeout_add_seconds(KEYBOARD_POLL_S, self.check_keyboards)
+
+    def log(self, text):
+        line = time.strftime("%Y-%m-%d %H:%M:%S ") + text
+        if self.verbose:
+            print(line, flush=True)
+        try:
+            os.makedirs(os.path.dirname(self.log_path), exist_ok=True)
+            if os.path.exists(self.log_path) and os.path.getsize(self.log_path) > LOG_LIMIT:
+                os.replace(self.log_path, self.log_path + ".old")
+            with open(self.log_path, "a", encoding="utf-8") as f:
+                f.write(line + "\n")
+        except OSError:
+            pass
+
+    @staticmethod
+    def osk(action):
+        # gbook-osk returns at once (it only signals or starts wvkbd)
+        try:
+            subprocess.run(["gbook-osk", action], stdin=subprocess.DEVNULL,
+                           stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL,
+                           timeout=5, check=False)
+        except (OSError, subprocess.SubprocessError):
+            pass
+
+    # -- label language of the on-screen keyboard -------------------------
+    def find_osk(self):
+        """PID of the running wvkbd-gbook (looked up at most every two seconds)."""
+        if self.osk_pid:
+            try:
+                with open("/proc/%d/comm" % self.osk_pid) as f:
+                    if f.read().strip() == OSK_NAME:
+                        return self.osk_pid
+            except OSError:
+                pass
+            self.osk_pid = 0
+            self.korean = None
+        now = time.monotonic()
+        if now - self.osk_checked < 2.0:
+            return 0
+        self.osk_checked = now
+        try:
+            out = subprocess.run(["pgrep", "-x", "-u", str(os.getuid()), OSK_NAME],
+                                 stdin=subprocess.DEVNULL, capture_output=True,
+                                 text=True, timeout=3, check=False).stdout.split()
+        except (OSError, subprocess.SubprocessError):
+            out = []
+        self.osk_pid = int(out[0]) if out else 0
+        return self.osk_pid
+
+    def input_method(self):
+        try:
+            reply = self.bus.call_sync(
+                "org.fcitx.Fcitx5", "/controller", "org.fcitx.Fcitx.Controller1",
+                "CurrentInputMethod", None, GLib.VariantType("(s)"),
+                Gio.DBusCallFlags.NO_AUTO_START, 300, None)
+        except GLib.Error:
+            return None
+        return reply.unpack()[0]
+
+    def sync_language(self, force=False):
+        pid = self.find_osk()
+        if not pid:
+            return
+        method = self.input_method()
+        if method is None:
+            return
+        korean = method == "hangul"
+        self.polls += 1
+        if korean != self.korean or force or self.polls % LANGUAGE_REPEAT_POLLS == 0:
+            try:
+                os.kill(pid, signal.SIGRTMIN + (2 if korean else 1))
+            except OSError:
+                self.osk_pid = 0
+                return
+            if korean != self.korean:
+                self.log("labels: " + ("korean" if korean else "latin"))
+            self.korean = korean
+
+    # -- hardware keyboard -----------------------------------------------
+    def detached(self):
+        return self.assume_detached or not self.keyboards
+
+    def check_keyboards(self):
+        keyboards = hardware_keyboards()
+        if keyboards != self.keyboards:
+            was_detached = self.keyboards is not None and self.detached()
+            self.keyboards = keyboards
+            self.log("hardware keyboards: " + (", ".join(keyboards) or "none"))
+            if self.detached() and not self.focus_timer:
+                self.focus = False
+                self.misses = 0
+                self.focus_timer = GLib.timeout_add(FOCUS_POLL_MS, self.check_focus)
+            elif not self.detached() and (self.focus_timer or was_detached):
+                if self.focus_timer:
+                    GLib.source_remove(self.focus_timer)
+                    self.focus_timer = 0
+                if self.shown:
+                    self.log("hide (hardware keyboard connected)")
+                    self.osk("hide")
+                    self.shown = False
+        self.keyboard_polls += 1
+        if not self.focus_timer and self.keyboard_polls % 3 == 0:
+            # keyboard shown by hand while a hardware keyboard is connected
+            self.sync_language(force=True)
+        return True
+
+    # -- text focus ------------------------------------------------------
+    def text_focus(self):
+        try:
+            reply = self.bus.call_sync(
+                "org.fcitx.Fcitx5", "/controller", "org.fcitx.Fcitx.Controller1",
+                "DebugInfo", None, GLib.VariantType("(s)"),
+                Gio.DBusCallFlags.NO_AUTO_START, 300, None)
+        except GLib.Error:
+            return False
+        return any(" focus:1" in line for line in reply.unpack()[0].splitlines())
+
+    def check_focus(self):
+        focus = self.text_focus()
+        if focus:
+            self.misses = 0
+            if not self.focus:
+                self.focus = True
+                self.log("show (text field focused)")
+                self.osk("show")
+                self.shown = True
+        elif self.focus:
+            self.misses += 1
+            if self.misses >= HIDE_AFTER_POLLS:
+                self.focus = False
+                self.log("hide (text field left)")
+                self.osk("hide")
+                self.shown = False
+        self.sync_language()
+        return True
+
+
+def main():
+    parser = argparse.ArgumentParser(description="automatic on-screen keyboard")
+    parser.add_argument("--assume-detached", action="store_true",
+                        help="behave as if no hardware keyboard were connected (test)")
+    parser.add_argument("--verbose", action="store_true", help="also print the log")
+    args = parser.parse_args()
+    AutoKeyboard(args.assume_detached, args.verbose)
+    GLib.MainLoop().run()
+    return 0
+
+
+if __name__ == "__main__":
+    sys.exit(main())

@@ -1,0 +1,7 @@
+image/
+live/iso/
+live/stage/
+live/vm/
+live/sysrescue.d/500-gbook.yaml
+*.img
+*.img.xz*

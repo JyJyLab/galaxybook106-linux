@@ -1,0 +1,147 @@
+#!/bin/bash
+# gbook-panel-setup [--once] — make the top Xfce panel tablet friendly: add
+# launchers (on-screen keyboard, rotation lock, rotate), a volume control and a
+# battery indicator, and enlarge the panel for touch. Run as the desktop user
+# inside the running Xfce session. Safe to run again: existing items are kept.
+#
+#   --once   first-login mode (started from /etc/xdg/autostart): wait for the
+#            panel, do the setup and remember it in ~/.config/gbook/panel-setup-done
+set -euo pipefail
+: "${XDG_RUNTIME_DIR:=/run/user/$(id -u)}"
+export XDG_RUNTIME_DIR
+export DBUS_SESSION_BUS_ADDRESS=${DBUS_SESSION_BUS_ADDRESS:-unix:path=$XDG_RUNTIME_DIR/bus}
+
+q() { xfconf-query -c xfce4-panel "$@"; }
+APPS=/usr/local/share/applications
+CFG="${XDG_CONFIG_HOME:-$HOME/.config}/xfce4/panel"
+LAUNCHERS=(gbook-osk.desktop gbook-rotate-lock.desktop gbook-rotate-next.desktop)
+# pulseaudio: package xfce4-pulseaudio-plugin, power-manager-plugin: package
+# xfce4-power-manager-plugins
+PLUGINS=(pulseaudio power-manager-plugin)
+MARK="${XDG_CONFIG_HOME:-$HOME/.config}/gbook/panel-setup-done"
+ONCE=0
+[ "${1:-}" = "--once" ] && ONCE=1
+
+panel_ids() { q -p /panels/panel-1/plugin-ids | grep -E '^[0-9]+$'; }
+all_ids() { q -l | sed -n 's|^/plugins/plugin-\([0-9]*\)$|\1|p'; }
+plugin_type() { q -p "/plugins/plugin-$1" 2>/dev/null || true; }
+
+have_type() { # have_type <type>
+	local id
+	for id in $(all_ids); do
+		[ "$(plugin_type "$id")" = "$1" ] && return 0
+	done
+	return 1
+}
+
+have_launcher() { # have_launcher <desktop file>
+	local id
+	for id in $(all_ids); do
+		if [ "$(plugin_type "$id")" = "launcher" ] &&
+			q -p "/plugins/plugin-$id/items" 2>/dev/null | grep -qx "$1"; then
+			return 0
+		fi
+	done
+	return 1
+}
+
+# A plugin type that is not installed must never be put on the panel:
+# xfce4-panel then stops at a "plugin could not be loaded" dialog and shows
+# no panel at all until somebody answers it.
+plugin_installed() { # plugin_installed <type>
+	local d
+	for d in /usr/share /usr/local/share; do
+		[ -e "$d/xfce4/panel/plugins/$1.desktop" ] && return 0
+	done
+	return 1
+}
+
+# insert_before <type> <new id>...   (appends when the type is not on the panel)
+insert_before() {
+	local anchor=$1 id placed=0 out=() args=()
+	shift
+	[ $# -gt 0 ] || return 0
+	for id in $(panel_ids); do
+		if [ "$placed" = 0 ] && [ "$(plugin_type "$id")" = "$anchor" ]; then
+			out+=("$@")
+			placed=1
+		fi
+		out+=("$id")
+	done
+	[ "$placed" = 1 ] || out+=("$@")
+	for id in "${out[@]}"; do args+=(-t int -s "$id"); done
+	q -p /panels/panel-1/plugin-ids --force-array "${args[@]}"
+}
+
+if [ "$ONCE" = 1 ]; then
+	[ -e "$MARK" ] && exit 0
+	# first login: wait until the panel runs and has written its default layout
+	n=0
+	until busctl --user status org.xfce.Panel >/dev/null 2>&1 && [ -n "$(panel_ids)" ]; do
+		n=$((n + 1))
+		[ "$n" -le 60 ] || { echo "xfce4-panel did not come up" >&2; exit 1; }
+		sleep 1
+	done
+	sleep 5
+fi
+
+[ -n "$(panel_ids)" ] || { echo "panel-1 has no plugins (is Xfce running?)" >&2; exit 1; }
+next=$(all_ids | sort -n | tail -n1)
+next=$((next + 1))
+changed=0
+
+new=()
+for d in "${LAUNCHERS[@]}"; do
+	have_launcher "$d" && continue
+	[ -f "$APPS/$d" ] || { echo "missing $APPS/$d" >&2; exit 1; }
+	mkdir -p "$CFG/launcher-$next"
+	cp "$APPS/$d" "$CFG/launcher-$next/$d"
+	q -p "/plugins/plugin-$next" -n -t string -s launcher
+	q -p "/plugins/plugin-$next/items" -n -a -t string -s "$d"
+	new+=("$next")
+	next=$((next + 1))
+done
+if [ "${#new[@]}" -gt 0 ]; then
+	insert_before systray "${new[@]}"
+	changed=1
+fi
+
+new=()
+for type in "${PLUGINS[@]}"; do
+	have_type "$type" && continue
+	if ! plugin_installed "$type"; then
+		echo "panel plugin '$type' is not installed, skipped" >&2
+		continue
+	fi
+	q -p "/plugins/plugin-$next" -n -t string -s "$type"
+	new+=("$next")
+	next=$((next + 1))
+done
+if [ "${#new[@]}" -gt 0 ]; then
+	insert_before clock "${new[@]}"
+	changed=1
+fi
+
+# Volume popups come from gbook-osd (hardware buttons); with the plugin's own
+# notifications every key press would show two of them.
+for id in $(all_ids); do
+	if [ "$(plugin_type "$id")" = "pulseaudio" ] &&
+		[ "$(q -p "/plugins/plugin-$id/show-notifications" 2>/dev/null || echo unset)" != "0" ]; then
+		q -p "/plugins/plugin-$id/show-notifications" -n -t uint -s 0 || true
+	fi
+done
+
+# larger top panel for touch
+if [ "$(q -p /panels/panel-1/size 2>/dev/null || echo 0)" != "36" ]; then
+	q -p /panels/panel-1/size -n -t uint -s 36 2>/dev/null || q -p /panels/panel-1/size -s 36
+	changed=1
+fi
+
+if [ "$changed" = 1 ]; then
+	xfce4-panel -r >/dev/null 2>&1 || true
+fi
+if [ "$ONCE" = 1 ]; then
+	mkdir -p "${MARK%/*}"
+	: >"$MARK"
+fi
+echo "panel-1 plugins: $(panel_ids | tr '\n' ' ')"

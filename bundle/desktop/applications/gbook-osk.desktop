@@ -1,0 +1,10 @@
+[Desktop Entry]
+Type=Application
+Name=On-Screen Keyboard
+Name[ko]=화상 키보드
+Comment=Show or hide the on-screen keyboard
+Comment[ko]=화상 키보드 표시/숨김
+Exec=gbook-osk toggle
+Icon=input-keyboard
+Terminal=false
+Categories=Utility;Accessibility;

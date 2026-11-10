@@ -1,0 +1,112 @@
+--- a/src/ipa/libipa/camera_sensor_helper.cpp
++++ b/src/ipa/libipa/camera_sensor_helper.cpp
+@@ -554,6 +554,19 @@
+ };
+ REGISTER_CAMERA_SENSOR_HELPER("imx219", CameraSensorHelperImx219)
+ 
++class CameraSensorHelperImx241 : public CameraSensorHelper
++{
++public:
++	CameraSensorHelperImx241()
++	{
++		/* Measured: 64 at 10 bits (test pattern black). */
++		blackLevel_ = 4096;
++		/* Sony SMIA style analogue gain: 256 / (256 - code), measured. */
++		gain_ = AnalogueGainLinear{ 0, 256, -1, 256 };
++	}
++};
++REGISTER_CAMERA_SENSOR_HELPER("imx241", CameraSensorHelperImx241)
++
+ class CameraSensorHelperImx258 : public CameraSensorHelper
+ {
+ public:
+--- a/src/libcamera/sensor/camera_sensor_properties.cpp
++++ b/src/libcamera/sensor/camera_sensor_properties.cpp
+@@ -210,6 +210,22 @@
+ 				.hblankDelay = 2
+ 			},
+ 		} },
++		{ "imx241", {
++			.unitCellSize = { 1120, 1120 },
++			.testPatternModes = {
++				{ controls::draft::TestPatternModeOff, 0 },
++				{ controls::draft::TestPatternModeSolidColor, 1 },
++				{ controls::draft::TestPatternModeColorBars, 2 },
++				{ controls::draft::TestPatternModeColorBarsFadeToGray, 3 },
++				{ controls::draft::TestPatternModePn9, 4 },
++			},
++			.sensorDelays = {
++				.exposureDelay = 2,
++				.gainDelay = 1,
++				.vblankDelay = 2,
++				.hblankDelay = 2
++			},
++		} },
+ 		{ "imx258", {
+ 			.unitCellSize = { 1120, 1120 },
+ 			.testPatternModes = {
+--- a/src/libcamera/pipeline/ipu3/imgu.cpp
++++ b/src/libcamera/pipeline/ipu3/imgu.cpp
+@@ -108,7 +108,15 @@
+ void calculateBDSHeight(ImgUDevice::Pipe *pipe, const Size &iif, const Size &gdc,
+ 			unsigned int bdsWidth, float bdsSF)
+ {
+-	unsigned int minIFHeight = iif.height - ImgUDevice::kIFMaxCropHeight;
++	/*
++	 * The IF can crop at most kIFMaxCropHeight lines. For inputs lower than
++	 * that (e.g. a 1296x972 sensor mode) the unsigned subtraction wrapped
++	 * around, std::clamp() below got lo > hi and the process aborted
++	 * (_GLIBCXX_ASSERTIONS) whenever an output of another aspect ratio was
++	 * requested.
++	 */
++	unsigned int minIFHeight = iif.height > ImgUDevice::kIFMaxCropHeight
++				 ? iif.height - ImgUDevice::kIFMaxCropHeight : 0;
+ 	unsigned int minBDSHeight = gdc.height + ImgUDevice::kFilterHeight * 2;
+ 	unsigned int ifHeight;
+ 	float bdsHeight;
+--- a/src/libcamera/pipeline/ipu3/ipu3.cpp
++++ b/src/libcamera/pipeline/ipu3/ipu3.cpp
+@@ -423,7 +423,20 @@
+ 							      ImgUDevice::kOutputMarginHeight);
+ 			pixelFormat = formats::NV12;
+ 			bufferCount = IPU3CameraConfiguration::kBufferCount;
+-			streamFormats[pixelFormat] = { { ImgUDevice::kOutputMinSize, size } };
++			/*
++			 * Advertise only sizes the ImgU can produce: validate()
++			 * aligns the output down to kOutputAlignWidth x
++			 * kOutputAlignHeight, so a range with step 1 made users
++			 * (PipeWire) pick sizes such as 800x600 or 854x480 that
++			 * were then adjusted behind their back and the stream
++			 * stalled (buffer allocation failed with -EINVAL).
++			 */
++			streamFormats[pixelFormat] = {
++				SizeRange(Size(ImgUDevice::kOutputAlignWidth,
++					       ImgUDevice::kOutputAlignHeight),
++					  size, ImgUDevice::kOutputAlignWidth,
++					  ImgUDevice::kOutputAlignHeight)
++			};
+ 
+ 			break;
+ 
+@@ -452,7 +465,20 @@
+ 							      ImgUDevice::kOutputAlignHeight);
+ 			pixelFormat = formats::NV12;
+ 			bufferCount = IPU3CameraConfiguration::kBufferCount;
+-			streamFormats[pixelFormat] = { { ImgUDevice::kOutputMinSize, size } };
++			/*
++			 * Advertise only sizes the ImgU can produce: validate()
++			 * aligns the output down to kOutputAlignWidth x
++			 * kOutputAlignHeight, so a range with step 1 made users
++			 * (PipeWire) pick sizes such as 800x600 or 854x480 that
++			 * were then adjusted behind their back and the stream
++			 * stalled (buffer allocation failed with -EINVAL).
++			 */
++			streamFormats[pixelFormat] = {
++				SizeRange(Size(ImgUDevice::kOutputAlignWidth,
++					       ImgUDevice::kOutputAlignHeight),
++					  size, ImgUDevice::kOutputAlignWidth,
++					  ImgUDevice::kOutputAlignHeight)
++			};
+ 
+ 			break;
+ 		}

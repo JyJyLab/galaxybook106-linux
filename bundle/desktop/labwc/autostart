@@ -1,0 +1,20 @@
+# labwc autostart for the Xfce Wayland session on the Galaxy Book 10.6
+# Installed as ~/.config/xfce4/labwc/autostart (run once when the compositor starts)
+
+# Let systemd user services and D-Bus activated programs (portals) see the session
+dbus-update-activation-environment --systemd WAYLAND_DISPLAY XDG_CURRENT_DESKTOP XDG_SESSION_TYPE >/dev/null 2>&1
+
+# Base rotation, scale and touch/pen mapping for the internal panel
+gbook-display init >/dev/null 2>&1
+
+# Follow the accelerometer
+gbook-autorotate >/dev/null 2>&1 &
+
+# Korean input method (Debian ships no autostart entry for fcitx5)
+if command -v fcitx5 >/dev/null 2>&1; then
+	fcitx5 -d --replace >/dev/null 2>&1 &
+fi
+
+# On-screen keyboard that appears with the text focus while no hardware
+# keyboard (keyboard cover) is connected
+gbook-osk-auto >/dev/null 2>&1 &

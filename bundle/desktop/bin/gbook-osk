@@ -1,0 +1,44 @@
+#!/bin/sh
+# gbook-osk — show/hide the on-screen keyboard (wvkbd) under labwc.
+#   gbook-osk [toggle|show|hide]
+# gbook-osk-auto calls this when a text field gets the focus while no
+# hardware keyboard is connected; the panel button calls "toggle".
+# wvkbd-gbook: wvkbd with a Korean layer and a Hangul/English key (bundle
+# directory osk/); the plain Debian binary is the fallback
+OSK=wvkbd-gbook
+command -v "$OSK" >/dev/null 2>&1 || OSK=wvkbd-mobintl
+command -v "$OSK" >/dev/null 2>&1 || { echo "gbook-osk: wvkbd not installed" >&2; exit 1; }
+
+if ! pgrep -x -u "$(id -u)" "$OSK" >/dev/null 2>&1; then
+	case "${1:-toggle}" in
+	hide) exit 0 ;;
+	esac
+	# 450 device pixels high (53 mm on the 216 dpi panel) for every output
+	# scale; wvkbd takes the value before scaling.
+	#
+	# wvkbd chooses between its portrait and landscape settings from the
+	# physical size of the output. This panel has no EDID and reports 0x0 mm,
+	# so wvkbd always uses the portrait settings, whatever the rotation.
+	# Both sets get the same height and the full layout (the phone landscape
+	# layout is too sparse for a 10.6 inch screen).
+	SCALE=1
+	# shellcheck disable=SC1091
+	[ -r /etc/gbook/display.conf ] && . /etc/gbook/display.conf
+	# shellcheck disable=SC1091
+	[ -r "${XDG_CONFIG_HOME:-$HOME/.config}/gbook/display.conf" ] &&
+		. "${XDG_CONFIG_HOME:-$HOME/.config}/gbook/display.conf"
+	set -- "${1:-toggle}" $(awk -v s="${SCALE:-1}" 'BEGIN {
+		if (s + 0 <= 0) s = 1
+		printf "%d %d", 450 / s, 27 / s }')
+	LAYERS=full,special,emoji,nav
+	setsid "$OSK" -H "$2" -L "$2" -l "$LAYERS" --landscape-layers "$LAYERS" \
+		--fn "Sans $3" >/dev/null 2>&1 &
+	exit 0
+fi
+
+case "${1:-toggle}" in
+show) pkill -USR2 -x -u "$(id -u)" "$OSK" ;;
+hide) pkill -USR1 -x -u "$(id -u)" "$OSK" ;;
+*) pkill -RTMIN -x -u "$(id -u)" "$OSK" ;;
+esac
+exit 0

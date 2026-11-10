@@ -1,0 +1,14 @@
+---
+# Galaxy Book 10.6 installer settings (merged over 100-defaults.yaml).
+# Public build: no SSH key, installation from the console (gbook-install).
+global:
+    copytoram: false
+
+autorun:
+    ar_nowait: true
+    exec:
+        100:
+            path: "bash"
+            parameters:
+                - "/run/archiso/bootmnt/autorun/gbook-live.sh"
+            wait: never

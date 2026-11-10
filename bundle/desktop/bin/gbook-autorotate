@@ -1,0 +1,46 @@
+#!/bin/bash
+# gbook-autorotate — follow the accelerometer (iio-sensor-proxy) and rotate the
+# internal panel through gbook-display. Runs for the lifetime of the session.
+set -u
+
+CONF_SYS=/etc/gbook/display.conf
+CONF_USER="${XDG_CONFIG_HOME:-$HOME/.config}/gbook/display.conf"
+LOCK_FILE="${XDG_CONFIG_HOME:-$HOME/.config}/gbook/rotation-lock"
+RUN_DIR="${XDG_RUNTIME_DIR:-/tmp}/gbook"
+AUTOROTATE=1
+# shellcheck disable=SC1090
+[ -r "$CONF_SYS" ] && . "$CONF_SYS"
+# shellcheck disable=SC1090
+[ -r "$CONF_USER" ] && . "$CONF_USER"
+
+[ "$AUTOROTATE" = "1" ] || exit 0
+command -v monitor-sensor >/dev/null 2>&1 || { echo "gbook-autorotate: monitor-sensor not found (install iio-sensor-proxy)" >&2; exit 1; }
+
+handle_line() {
+	local line=$1 orient=
+	case "$line" in
+	*"orientation changed: "*)
+		orient=${line##*orientation changed: } ;;
+	*"Has accelerometer (orientation: "*)
+		orient=${line##*orientation: }
+		orient=${orient%%[),]*} ;;
+	*) return 0 ;;
+	esac
+	orient=${orient%%[[:space:]]*}
+	case "$orient" in
+	normal|left-up|right-up|bottom-up) ;;
+	*) return 0 ;;
+	esac
+	# remember the last reading so that unlocking can catch up
+	mkdir -p "$RUN_DIR" && echo "$orient" >"$RUN_DIR/sensor-orientation"
+	[ -e "$LOCK_FILE" ] && return 0
+	gbook-display set "$orient"
+}
+
+while :; do
+	while IFS= read -r line; do
+		handle_line "$line"
+	done < <(stdbuf -oL monitor-sensor --accel 2>/dev/null)
+	# monitor-sensor exited (sensor proxy restarted or not available yet)
+	sleep 5
+done

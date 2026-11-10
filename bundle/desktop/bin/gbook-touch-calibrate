@@ -1,0 +1,291 @@
+#!/usr/bin/python3
+"""gbook-touch-calibrate - one-tap check of the touchscreen orientation.
+
+Shows a target on the screen. A finger tap on it tells whether the touch
+position is right or turned by 180 degrees; in the second case the
+calibration matrix of the touchscreen in the labwc configuration is switched,
+labwc reloads its configuration and a second tap confirms the result.
+
+    gbook-touch-calibrate [--timeout SECONDS] [--message TEXT]
+
+Exit status: 0 position confirmed, 1 closed by the user, 2 timeout,
+             3 unexpected result (nothing usable was found or changed)
+Every tap is written to ~/.local/state/gbook-touch-calibrate.log.
+"""
+import argparse
+import json
+import math
+import os
+import re
+import subprocess
+import sys
+import time
+
+import gi
+
+gi.require_version("Gtk", "3.0")
+gi.require_version("Gdk", "3.0")
+gi.require_version("Pango", "1.0")
+gi.require_version("PangoCairo", "1.0")
+from gi.repository import Gdk, GLib, Gtk, Pango, PangoCairo  # noqa: E402
+
+# Target position (fraction of the screen). It lies on no symmetry axis, so a
+# tap seen at one of the seven mirrored/rotated positions names the error.
+TARGET = (0.20, 0.35)
+ROT180 = "-1 0 1 0 -1 1"
+IDENT = "1 0 0 0 1 0"
+MATRIX_RE = re.compile(r"(<calibrationMatrix>)([^<]*)(</calibrationMatrix>)")
+
+
+def rc_path():
+    cfg = os.environ.get("XDG_CONFIG_HOME") or os.path.expanduser("~/.config")
+    for path in (os.environ.get("GBOOK_LABWC_RC"),
+                 cfg + "/xfce4/labwc/rc.xml", cfg + "/labwc/rc.xml"):
+        if path and os.path.isfile(path) and os.access(path, os.W_OK):
+            return path
+    return None
+
+
+def read_matrix(path):
+    """Calibration matrix in the labwc configuration, None if there is none."""
+    if not path:
+        return None
+    with open(path, encoding="utf-8") as f:
+        m = MATRIX_RE.search(f.read())
+    return " ".join(m.group(2).split()) if m else None
+
+
+def switch_matrix(path):
+    """Switch between no rotation and 180 degrees, reload labwc."""
+    with open(path, encoding="utf-8") as f:
+        text = f.read()
+    m = MATRIX_RE.search(text)
+    old = " ".join(m.group(2).split()) if m else None
+    new = IDENT if old == ROT180 else ROT180
+    if m:
+        text = text[:m.start(2)] + new + text[m.end(2):]
+    else:
+        block = ('  <libinput>\n    <device category="touch">\n'
+                 '      <calibrationMatrix>%s</calibrationMatrix>\n'
+                 '    </device>\n  </libinput>\n\n' % new)
+        if "</labwc_config>" not in text:
+            raise RuntimeError("no </labwc_config> in " + path)
+        text = text.replace("</labwc_config>", block + "</labwc_config>", 1)
+    tmp = path + ".tmp"
+    with open(tmp, "w", encoding="utf-8") as f:
+        f.write(text)
+    os.replace(tmp, path)
+    pid = os.environ.get("LABWC_PID")
+    if pid and pid.isdigit():
+        subprocess.call(["kill", "-HUP", pid])
+    else:
+        subprocess.call(["pkill", "-HUP", "-x", "-u", str(os.getuid()), "labwc"])
+    return old, new
+
+
+def classify(x, y, width, height):
+    """Name of the image of the target nearest to the tap and its distance (px)."""
+    tx, ty = TARGET
+    images = {
+        "ok": (tx, ty),
+        "rot180": (1 - tx, 1 - ty),
+        "mirror-x": (1 - tx, ty),
+        "mirror-y": (tx, 1 - ty),
+        "swap": (ty, tx),
+        "rot90": (1 - ty, tx),
+        "rot270": (ty, 1 - tx),
+        "swap-rot180": (1 - ty, 1 - tx),
+    }
+
+    def dist(p):
+        return math.hypot((p[0] - x) * width, (p[1] - y) * height)
+
+    name = min(images, key=lambda k: dist(images[k]))
+    return name, dist(images[name])
+
+
+class Calibrator(Gtk.Window):
+    def __init__(self, timeout, log_path, message=None):
+        super().__init__(title="터치 보정")
+        self.set_decorated(False)
+        self.rc = rc_path()
+        self.log_path = log_path
+        self.exit_code = 2
+        self.result = "timeout"
+        self.done = False
+        self.flips = 0
+        self.ignore_until = 0.0
+        self.deadline = time.monotonic() + timeout
+        self.message = message or "빨간 원을 손가락으로 한 번 누르십시오"
+        self.colour = (0.93, 0.93, 0.93)
+        self.hint = "닫기: 키보드의 아무 키, 또는 S펜·마우스로 아무 곳이나 누름"
+
+        self.area = Gtk.DrawingArea()
+        self.area.add_events(Gdk.EventMask.TOUCH_MASK | Gdk.EventMask.BUTTON_PRESS_MASK)
+        self.area.connect("draw", self.on_draw)
+        self.area.connect("touch-event", self.on_touch)
+        self.area.connect("button-press-event", self.on_button)
+        self.add(self.area)
+        self.connect("key-press-event", self.on_key)
+        self.connect("destroy", Gtk.main_quit)
+        GLib.timeout_add(500, self.on_tick)
+        self.log(event="start", rc=self.rc, matrix=read_matrix(self.rc))
+        self.fullscreen()
+        self.show_all()
+
+    # -- helpers ---------------------------------------------------------
+    def log(self, **fields):
+        fields["time"] = time.strftime("%Y-%m-%d %H:%M:%S")
+        try:
+            os.makedirs(os.path.dirname(self.log_path), exist_ok=True)
+            with open(self.log_path, "a", encoding="utf-8") as f:
+                f.write(json.dumps(fields, ensure_ascii=False) + "\n")
+        except OSError:
+            pass
+
+    def say(self, message, colour=(0.93, 0.93, 0.93)):
+        self.message = message
+        self.colour = colour
+        self.area.queue_draw()
+
+    def finish(self, code, result, message, colour, delay_ms=2200):
+        if self.done:
+            return
+        self.done = True
+        self.exit_code = code
+        self.result = result
+        self.log(event="result", result=result, code=code, matrix=read_matrix(self.rc))
+        self.say(message, colour)
+        GLib.timeout_add(delay_ms, self.close_window)
+
+    def close_window(self):
+        self.destroy()
+        return False
+
+    # -- events ----------------------------------------------------------
+    def on_tick(self):
+        if not self.done and time.monotonic() > self.deadline:
+            self.finish(2, "timeout", "시간이 지나 닫습니다", (0.95, 0.75, 0.3), 800)
+        self.area.queue_draw()
+        return True
+
+    def on_key(self, _widget, _event):
+        self.finish(1, "closed", "닫습니다", (0.93, 0.93, 0.93), 300)
+        return True
+
+    def on_button(self, _widget, event):
+        device = event.get_source_device()
+        if device is not None and device.get_source() == Gdk.InputSource.TOUCHSCREEN:
+            return True  # pointer event emulated from a touch
+        self.finish(1, "closed", "닫습니다", (0.93, 0.93, 0.93), 300)
+        return True
+
+    def on_touch(self, _widget, event):
+        if event.type != Gdk.EventType.TOUCH_BEGIN:
+            return True
+        now = time.monotonic()
+        if self.done or now < self.ignore_until:
+            return True
+        alloc = self.area.get_allocation()
+        width, height = alloc.width, alloc.height
+        x, y = event.x / width, event.y / height
+        name, dist = classify(x, y, width, height)
+        limit = 0.11 * min(width, height)
+        self.log(event="tap", x=round(x, 4), y=round(y, 4), nearest=name,
+                 distance_px=round(dist), limit_px=round(limit),
+                 size=[width, height], matrix=read_matrix(self.rc))
+        if dist > limit:
+            self.say("원에서 벗어났습니다. 빨간 원을 다시 눌러 주십시오", (0.95, 0.75, 0.3))
+        elif name == "ok":
+            text = "터치 위치 정상" if self.flips == 0 else "보정 완료: 터치 위치 정상"
+            self.finish(0, "ok" if self.flips == 0 else "corrected", text, (0.45, 0.9, 0.5))
+        elif name == "rot180":
+            if self.flips >= 1:
+                self.finish(3, "still-rot180", "보정 후에도 반대편으로 인식됩니다",
+                            (0.95, 0.5, 0.4), 4000)
+            elif not self.rc:
+                self.finish(3, "no-config", "labwc 설정 파일을 찾지 못했습니다",
+                            (0.95, 0.5, 0.4), 4000)
+            else:
+                try:
+                    old, new = switch_matrix(self.rc)
+                except (OSError, RuntimeError) as err:
+                    self.log(event="error", error=str(err))
+                    self.finish(3, "write-failed", "설정을 바꾸지 못했습니다",
+                                (0.95, 0.5, 0.4), 4000)
+                    return True
+                self.flips += 1
+                self.ignore_until = now + 1.5
+                self.deadline = max(self.deadline, time.monotonic() + 60)
+                self.log(event="switch", old=old, new=new)
+                self.say("터치가 180도 반대로 인식되어 방향을 바꿨습니다.\n"
+                         "빨간 원을 다시 눌러 확인해 주십시오", (0.95, 0.75, 0.3))
+        else:
+            self.finish(3, name, "가로·세로가 바뀐 위치로 인식됩니다 (%s).\n"
+                        "자동 보정 대상이 아닙니다" % name, (0.95, 0.5, 0.4), 5000)
+        return True
+
+    # -- drawing ---------------------------------------------------------
+    def text(self, cr, markup_text, px, x, y, colour, width):
+        layout = PangoCairo.create_layout(cr)
+        font = Pango.FontDescription("Sans")
+        font.set_absolute_size(px * Pango.SCALE)
+        layout.set_font_description(font)
+        layout.set_width(int(width * Pango.SCALE))
+        layout.set_wrap(Pango.WrapMode.WORD_CHAR)
+        layout.set_text(markup_text, -1)
+        cr.set_source_rgb(*colour)
+        cr.move_to(x, y)
+        PangoCairo.show_layout(cr, layout)
+        return layout.get_pixel_size()[1]
+
+    def on_draw(self, _widget, cr):
+        alloc = self.area.get_allocation()
+        width, height = alloc.width, alloc.height
+        unit = min(width, height)
+        cr.set_source_rgb(0.07, 0.08, 0.10)
+        cr.paint()
+
+        cx, cy = TARGET[0] * width, TARGET[1] * height
+        radius = 0.05 * unit
+        cr.set_source_rgb(0.9, 0.15, 0.15)
+        cr.arc(cx, cy, radius, 0, 2 * math.pi)
+        cr.fill()
+        cr.set_source_rgb(1, 1, 1)
+        cr.set_line_width(max(2.0, unit * 0.004))
+        cr.arc(cx, cy, radius * 1.45, 0, 2 * math.pi)
+        cr.stroke()
+        for dx, dy in ((1, 0), (0, 1)):
+            cr.move_to(cx - dx * radius * 0.6, cy - dy * radius * 0.6)
+            cr.line_to(cx + dx * radius * 0.6, cy + dy * radius * 0.6)
+        cr.stroke()
+
+        left = 0.40 * width
+        box = 0.56 * width
+        top = 0.30 * height
+        top += self.text(cr, "터치 보정", unit * 0.055, left, top, (0.6, 0.75, 1.0), box)
+        top += unit * 0.03
+        top += self.text(cr, self.message, unit * 0.042, left, top, self.colour, box)
+        top += unit * 0.05
+        top += self.text(cr, self.hint, unit * 0.026, left, top, (0.6, 0.6, 0.62), box)
+        if not self.done:
+            remaining = max(0, int(self.deadline - time.monotonic()))
+            self.text(cr, "남은 시간 %d초" % remaining, unit * 0.024, left,
+                      top + unit * 0.02, (0.45, 0.45, 0.47), box)
+        return False
+
+
+def main():
+    parser = argparse.ArgumentParser(description="one-tap touchscreen orientation check")
+    parser.add_argument("--timeout", type=int, default=120, help="seconds to wait for a tap")
+    parser.add_argument("--message", help="first line shown instead of the default request")
+    args = parser.parse_args()
+    state = os.environ.get("XDG_STATE_HOME") or os.path.expanduser("~/.local/state")
+    window = Calibrator(max(5, args.timeout), state + "/gbook-touch-calibrate.log", args.message)
+    Gtk.main()
+    print("result=%s matrix=%s" % (window.result, read_matrix(window.rc)))
+    return window.exit_code
+
+
+if __name__ == "__main__":
+    sys.exit(main())
