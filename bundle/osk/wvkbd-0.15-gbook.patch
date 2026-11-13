@@ -1,7 +1,13 @@
 diff -ruN wvkbd-0.15/keyboard.c wvkbd-0.15-gbook/keyboard.c
---- wvkbd-0.15/keyboard.c	2024-05-04 17:42:12.000000000 +0000
-+++ wvkbd-0.15-gbook/keyboard.c	2026-11-10 11:51:32.072164634 +0000
-@@ -42,6 +42,39 @@
+--- wvkbd-0.15/keyboard.c	2024-05-05 02:42:12.000000000 +0900
++++ wvkbd-0.15-gbook/keyboard.c	2026-11-11 22:13:01.346636476 +0900
+@@ -1,3 +1,5 @@
++#include <signal.h>
++#include <unistd.h>
+ #include "proto/virtual-keyboard-unstable-v1-client-protocol.h"
+ #include <linux/input-event-codes.h>
+ #include <stddef.h>
+@@ -42,6 +44,39 @@
      kbd_draw_layout(kb);
  }
  
@@ -41,7 +47,32 @@ diff -ruN wvkbd-0.15/keyboard.c wvkbd-0.15-gbook/keyboard.c
  void
  kbd_next_layer(struct kbd *kb, struct key *k, bool invert)
  {
-@@ -304,6 +337,12 @@
+@@ -273,11 +308,24 @@
+     return 0;
+ }
+ 
++/* gbook: the "hide" key (shown as ▼) sends nothing to the compositor; on
++ * release it hides the keyboard through the same path as SIGUSR1 (signalfd
++ * in main.c). gbook-osk-auto shows it again at the next text focus. */
++#define GBOOK_KEY_HIDE KEY_KEYBOARD
++
+ void
+ kbd_unpress_key(struct kbd *kb, uint32_t time)
+ {
+     bool unlatch_shift = false;
+ 
++    if (kb->last_press && kb->last_press->type == Code &&
++        kb->last_press->code == GBOOK_KEY_HIDE) {
++        kbd_draw_key(kb, kb->last_press, Unpress);
++        kb->last_press = NULL;
++        kill(getpid(), SIGUSR1);
++        return;
++    }
++
+     if (kb->last_press) {
+         unlatch_shift = (kb->mods & Shift) == Shift;
+ 
+@@ -304,6 +352,12 @@
          if (kb->compose >= 2) {
              kb->compose = 0;
              kbd_switch_layout(kb, kb->last_abc_layout, kb->last_abc_index);
@@ -54,9 +85,21 @@ diff -ruN wvkbd-0.15/keyboard.c wvkbd-0.15-gbook/keyboard.c
          } else if (unlatch_shift) {
              kbd_draw_layout(kb);
          } else {
+@@ -364,6 +418,11 @@
+ void
+ kbd_press_key(struct kbd *kb, struct key *k, uint32_t time)
+ {
++    if (k->type == Code && k->code == GBOOK_KEY_HIDE) {
++        kb->last_swipe = kb->last_press = k;
++        kbd_draw_key(kb, k, Press);
++        return;
++    }
+     if ((kb->compose == 1) && (k->type != Compose) && (k->type != Mod)) {
+         if ((k->type == NextLayer) || (k->type == BackLayer) ||
+             ((k->type == Code) && (k->code == KEY_SPACE))) {
 diff -ruN wvkbd-0.15/keyboard.h wvkbd-0.15-gbook/keyboard.h
---- wvkbd-0.15/keyboard.h	2024-05-04 17:42:12.000000000 +0000
-+++ wvkbd-0.15-gbook/keyboard.h	2026-11-10 11:51:32.072009479 +0000
+--- wvkbd-0.15/keyboard.h	2024-05-05 02:42:12.000000000 +0900
++++ wvkbd-0.15-gbook/keyboard.h	2026-11-11 22:11:49.164264701 +0900
 @@ -101,6 +101,7 @@
  	double scale;
  	double preferred_scale, preferred_fractional_scale;
@@ -74,8 +117,8 @@ diff -ruN wvkbd-0.15/keyboard.h wvkbd-0.15-gbook/keyboard.h
  void create_and_upload_keymap(struct kbd *kb, const char *name,
                                uint32_t comp_unichr, uint32_t comp_shift_unichr);
 diff -ruN wvkbd-0.15/layout.mobintl.h wvkbd-0.15-gbook/layout.mobintl.h
---- wvkbd-0.15/layout.mobintl.h	2024-05-04 17:42:12.000000000 +0000
-+++ wvkbd-0.15-gbook/layout.mobintl.h	2026-11-10 11:51:32.071744647 +0000
+--- wvkbd-0.15/layout.mobintl.h	2024-05-05 02:42:12.000000000 +0900
++++ wvkbd-0.15-gbook/layout.mobintl.h	2026-11-11 22:13:56.691021495 +0900
 @@ -22,6 +22,7 @@
  	Greek,
  	Georgian,
@@ -102,7 +145,7 @@ diff -ruN wvkbd-0.15/layout.mobintl.h wvkbd-0.15-gbook/layout.mobintl.h
    [Emoji] = {keys_emoji, "latin", "emoji", false},
    [Nav] = {keys_nav, "latin", "nav", false},
    [Landscape] = {keys_landscape, "latin", "landscape", true},
-@@ -234,13 +237,87 @@
+@@ -234,11 +237,87 @@
    {"", "", 0.0, EndRow},
  
    {"⌨͕", "⌨͔", 1.5, NextLayer, .scheme = 1},
@@ -110,11 +153,12 @@ diff -ruN wvkbd-0.15/layout.mobintl.h wvkbd-0.15-gbook/layout.mobintl.h
    {"Cmp", "Cmp", 1.0, Compose, .scheme = 1},
    {",", "'", 1.0, Code, KEY_COMMA, &layouts[ComposeMath]},
 -  {"", "Tab", 4.0, Code, KEY_SPACE},
-+  {"", "Tab", 3.0, Code, KEY_SPACE},
++  {"", "Tab", 2.0, Code, KEY_SPACE},
    {".", "?", 1.0, Code, KEY_DOT, &layouts[ComposePunctuation]},
    {"Enter", "Enter", 1.5, Code, KEY_ENTER, .scheme = 1},
- 
-   /* end of layout */
++  {"▼", "▼", 1.0, Code, KEY_KEYBOARD, .scheme = 1},
++
++  /* end of layout */
 +  {"", "", 0.0, Last},
 +};
 +
@@ -183,17 +227,48 @@ diff -ruN wvkbd-0.15/layout.mobintl.h wvkbd-0.15-gbook/layout.mobintl.h
 +  {"한/영", "한/영", 1.0, Code, KEY_HANGEUL, .scheme = 1},
 +  {"한자", "한자", 1.0, Code, KEY_HANJA, .scheme = 1},
 +  {",", "'", 1.0, Code, KEY_COMMA},
-+  {"", "Tab", 3.0, Code, KEY_SPACE},
++  {"", "Tab", 2.0, Code, KEY_SPACE},
 +  {".", "?", 1.0, Code, KEY_DOT},
 +  {"Enter", "Enter", 1.5, Code, KEY_ENTER, .scheme = 1},
-+
-+  /* end of layout */
++  {"▼", "▼", 1.0, Code, KEY_KEYBOARD, .scheme = 1},
+ 
+   /* end of layout */
+   {"", "", 0.0, Last},
+@@ -369,9 +448,10 @@
+   {"Abc", "Abc", 1.0, BackLayer, .scheme = 1},
+   {"⌨͕", "⌨͔", 1.0, NextLayer, .scheme = 1},
+   {",", "'", 1.0, Code, KEY_COMMA, &layouts[ComposeMath]},
+-  {"", "Tab", 4.0, Code, KEY_SPACE},
++  {"", "Tab", 3.0, Code, KEY_SPACE},
+   {".", "?", 1.0, Code, KEY_DOT, &layouts[ComposePunctuation]},
+   {"Enter", "Enter", 2.0, Code, KEY_ENTER, .scheme = 1},
++  {"▼", "▼", 1.0, Code, KEY_KEYBOARD, .scheme = 1},
+ 
+   /* end of layout */
+   {"", "", 0.0, Last},
+@@ -471,9 +551,10 @@
+   {"Ctr", "Ctr", 1.0, Mod, Ctrl, .scheme = 1},
+   {"-", "_", 0.75, Code, KEY_MINUS, &layouts[ComposeMath]},
+   {",", "'", 0.75, Code, KEY_COMMA, &layouts[ComposeBracket]},
+-  {"", "Tab", 3.0, Code, KEY_SPACE},
++  {"", "Tab", 2.0, Code, KEY_SPACE},
+   {".", "?", 1.0, Code, KEY_DOT, &layouts[ComposePunctuation]},
+   {"Enter", "Enter", 1.5, Code, KEY_ENTER, .scheme = 1},
++  {"▼", "▼", 1.0, Code, KEY_KEYBOARD, .scheme = 1},
+ 
+   /* end of layout */
+   {"", "", 0.0, Last},
+@@ -1073,6 +1154,7 @@
+   {"", "↹", 1.0, Code, KEY_SPACE, .scheme = 1},
+   {"↓", "↓", 1.0, Code, KEY_DOWN, .scheme = 1},
+   {"⇊", "⇊", 1.0, Code, KEY_PAGEDOWN, .scheme = 1},
++  {"▼", "▼", 1.0, Code, KEY_KEYBOARD, .scheme = 1},
    {"", "", 0.0, Last},
  };
  
 diff -ruN wvkbd-0.15/main.c wvkbd-0.15-gbook/main.c
---- wvkbd-0.15/main.c	2024-05-04 17:42:12.000000000 +0000
-+++ wvkbd-0.15-gbook/main.c	2026-11-10 11:51:32.072323535 +0000
+--- wvkbd-0.15/main.c	2024-05-05 02:42:12.000000000 +0900
++++ wvkbd-0.15-gbook/main.c	2026-11-11 22:19:23.976996935 +0900
 @@ -684,6 +684,7 @@
      fprintf(stderr, "  -R [int]    - Rounding radius in pixels\n");
      fprintf(stderr, "  --fn [font] - Set font (e.g: DejaVu Sans 20)\n");
@@ -202,7 +277,48 @@ diff -ruN wvkbd-0.15/main.c wvkbd-0.15-gbook/main.c
      fprintf(
          stderr,
          "  --alpha [int]          - Set alpha value for all colors [0-255]\n");
-@@ -1067,6 +1068,8 @@
+@@ -718,6 +719,24 @@
+     }
+ }
+ 
++/* gbook: publish the visibility in $XDG_RUNTIME_DIR/wvkbd-gbook.visible ("1"/"0")
++ * so that gbook-osk-auto can show the keyboard again when a text field that
++ * still has the focus is tapped after the keyboard was hidden with the key */
++static void
++gbook_state(int visible)
++{
++    const char *dir = getenv("XDG_RUNTIME_DIR");
++    char path[512];
++    FILE *f;
++    if (!dir)
++        return;
++    snprintf(path, sizeof(path), "%s/wvkbd-gbook.visible", dir);
++    if ((f = fopen(path, "w"))) {
++        fputs(visible ? "1\n" : "0\n", f);
++        fclose(f);
++    }
++}
++
+ void
+ hide()
+ {
+@@ -738,6 +757,7 @@
+     wl_surface_destroy(draw_surf.surf);
+     layer_surface = NULL;
+     hidden = true;
++    gbook_state(0);
+ }
+ 
+ void
+@@ -776,6 +796,7 @@
+     zwlr_layer_surface_v1_add_listener(layer_surface, &layer_surface_listener,
+                                        NULL);
+     wl_surface_commit(draw_surf.surf);
++    gbook_state(1);
+ }
+ 
+ void
+@@ -1067,6 +1088,8 @@
      sigaddset(&signal_mask, SIGUSR1);
      sigaddset(&signal_mask, SIGUSR2);
      sigaddset(&signal_mask, SIGRTMIN);
@@ -211,7 +327,7 @@ diff -ruN wvkbd-0.15/main.c wvkbd-0.15-gbook/main.c
      sigaddset(&signal_mask, SIGPIPE);
      if (sigprocmask(SIG_BLOCK, &signal_mask, NULL) == -1) {
          die("Failed to disable handled signals: %d\n", errno);
-@@ -1101,6 +1104,15 @@
+@@ -1101,6 +1124,15 @@
                  show();
              else if (si.ssi_signo == SIGRTMIN)
                  toggle_visibility();

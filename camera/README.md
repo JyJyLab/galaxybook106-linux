@@ -27,7 +27,7 @@
 - 미가공 영상 해독 도구: `tools/ipu3raw.py`
 
 ## 앱에서 쓰기까지 (2026-11-10)
-- libcamera 0.7.2(Debian): IMX241용 센서 도우미가 없어 IPU3 파이프라인이 카메라를 거부 → 소스에 `CameraSensorHelperImx241`(흑 레벨 64@10비트, 게인 256/(256−코드))와 센서 속성(단위 셀 1.12 µm, 시험 패턴 0~4) 추가, `0.7.2-1+gbook1`로 다시 빌드(Debian forky chroot, 4분, 최종 패치 `libcamera/libcamera-0.7.2-gbook3.patch`). 묶음 `bundle/camera/debs/`, 기기에서 apt hold
+- libcamera 0.7.2(Debian): IMX241용 센서 도우미가 없어 IPU3 파이프라인이 카메라를 거부 → 소스에 `CameraSensorHelperImx241`(흑 레벨 64@10비트, 게인 256/(256−코드))와 센서 속성(단위 셀 1.12 µm, 시험 패턴 0~4) 추가, `0.7.2-1+gbook1`로 다시 빌드(Debian forky chroot, 4분, 패치는 현재 `libcamera/libcamera-0.7.2-gbook10.patch`에 포함). 묶음 `bundle/camera/debs/`, 기기에서 apt hold
 - 게인 실측: 코드 128 → 2.0배, 192 → 4.0배, 디지털 게인 512 → 2.0배, 노출 선형
 - 1296×972 모드 실기 확인(30 fps, 시험 패턴 정상)
 - **시스템 멈춤 원인**: ImgU(00:05.0)가 IOMMU 변환(DMA-FQ) 아래에서 전원을 켤 때 매핑되지 않은 메모리를 읽음(`DMAR: DMA Read … PTE Read access is not set`) → 기기 전체 멈춤·화면 줄무늬. 대책: ImgU 단독 IOMMU 그룹을 identity로(`gbook-imgu-identity`, modprobe install 훅 `/etc/modprobe.d/gbook-imgu.conf`). 다른 장치 보호는 유지
@@ -44,10 +44,26 @@
 ## 좌우 반전 (사용자 요청, 2026-11-10)
 - imx241 모듈 매개변수 `mirror`(기본 켬): HFLIP 컨트롤이 0일 때 센서 거울상 출력, 색 배열 GRBG로 보고. libcamera는 설정 때마다 flip 컨트롤을 0으로 되돌리므로 컨트롤 기본값으로는 안 됨. 끄려면 `options imx241 mirror=0`
 
+## 색 보정 (gbook10, 2026-11-13) — 윈도우 튜닝 데이터 적용
+- 근거: 삼성 윈도우 드라이버 패키지의 카메라 튜닝 파일 `IMX241_START2FRONT_SKY.cpf`(Intel AIQB CMC, 저장소에 미포함) 해독 → [cmc/README.md](cmc/README.md). `cmc/gen_yaml.py`가 libcamera 튜닝 파일 `imx241.yaml` 생성(생성 결과는 패치에 포함)
+- libcamera 0.7.2-1+gbook10(`libcamera/libcamera-0.7.2-gbook10.patch` = Debian 원본 대비 전체 변경, gbook3 내용 포함). 묶음 `bundle/camera/debs/`, 기기에서 apt hold
+- IPU3 IPA 추가·수정:
+  - `Ccm`: 광원 4종 색 보정 행렬을 AWB 색온도로 mired 보간(ImgU 8192=1.0)
+  - `LensShadingCorrection`: 41×31 음영 격자 4종(A·F2·D50·D65)을 색온도로 보간 → BDS 출력 좌표로 변환(IF 자르기·센서 binning·좌우 반전 반영) → ImgU SHD
+  - `Awb`: 회색 세계 추정을 모듈 색 응답 궤적(2300~6400K)에 투영해 색온도 산출, 궤적에서 0.06 이내로 제한
+  - `BlackLevelCorrection`: 튜닝 파일 `level`(IMX241 128)
+  - `ToneMapping`: sRGB 출력 곡선(`srgb: true`)
+- 실측으로 확정한 값:
+  - ImgU SHD 이득 = 1 + (lut << gain_factor) / 1024, LUT 12비트(4095 초과 시 넘침 → 모서리 고리 무늬). 노출·WB 고정 상태에서 보정 전후 프레임 비율로 측정, 윈도우 표와 오차 약 10%
+  - OBGRID 흑 레벨 = 10비트 값의 2배(128). 렌즈를 가린 프레임에서 64는 바닥 약 27/255 잔류, 128에서 G·B 0. 64일 때는 흑 잔류로 통계 색비가 1 쪽으로 눌려 AWB 궤적과 0.28 어긋났음 → 128에서 0.06
+  - 천장(백색) 위치별 색 편차로 음영 표의 색 보정 강도 검증(표 그대로가 최적에 근접)
+- 결과: 화면 전체 밝기 균일, 흰 천장·벽 중립, 대비 회복(이전 청록·뿌연 화면 해소). PipeWire 경로 640×480 30 fps 확인
+- 측정용 환경 변수(그대로 둠): `GBOOK_NO_LSC`, `GBOOK_NO_CCM`, `GBOOK_NO_LOCUS`, `GBOOK_LINEAR`(선형 출력·CCM 끔), `GBOOK_FREEZE_AT=<프레임>`(AE·AWB 고정), `GBOOK_LSC_FROM=<프레임>`, `GBOOK_OB=<값>`
+- 빌드: Debian forky chroot(`debootstrap --variant=buildd forky`) → `apt-get build-dep libcamera`(프로필 nodoc nocheck) → Debian `libcamera_0.7.2-1` 소스에 패치 적용 → `DEB_BUILD_PROFILES="nodoc nocheck" dpkg-buildpackage -b`, 4코어 약 3분 20초
+
 ## 남은 일
-1. 색 보정 파일(IPU3 IPA `imx241.yaml`) — 현재 uncalibrated(약간 청록)
+1. 차트 기반 색 정확도 정량 평가(휴대폰 화면 차트는 노출 과다·화면 감마로 부정확했음 — 인쇄 차트 권장)
 2. 커널이 7.2가 아니게 되면 DKMS 패키지 이식 필요(`BUILD_EXCLUSIVE_KERNEL="^7\.2\."`)
 3. 아날로그 게인 최대값(현재 224=8배)·노출 여유(5줄) 정밀 확인
 4. 웹캠 시험 사이트의 "0 FPS" 표시(PipeWire libcamera 플러그인이 framerate를 알리지 않음, 표시 문제)
-
-Firefox 실사용 확인·설치 이미지 반영 완료(2026-11-10).
+5. 상류 AGC 버그 메모: `agc.cpp` process()에서 gGain_/bGain_에 blue/green이 뒤바뀌어 들어감(미수정)

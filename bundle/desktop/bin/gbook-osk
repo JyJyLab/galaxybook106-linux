@@ -9,6 +9,10 @@ OSK=wvkbd-gbook
 command -v "$OSK" >/dev/null 2>&1 || OSK=wvkbd-mobintl
 command -v "$OSK" >/dev/null 2>&1 || { echo "gbook-osk: wvkbd not installed" >&2; exit 1; }
 
+# keep the active window above the keyboard (maximized windows respect the
+# keyboard's exclusive zone; see gbook-fit-active)
+fit() { command -v gbook-fit-active >/dev/null 2>&1 && (gbook-fit-active >/dev/null 2>&1 &); }
+
 if ! pgrep -x -u "$(id -u)" "$OSK" >/dev/null 2>&1; then
 	case "${1:-toggle}" in
 	hide) exit 0 ;;
@@ -33,12 +37,13 @@ if ! pgrep -x -u "$(id -u)" "$OSK" >/dev/null 2>&1; then
 	LAYERS=full,special,emoji,nav
 	setsid "$OSK" -H "$2" -L "$2" -l "$LAYERS" --landscape-layers "$LAYERS" \
 		--fn "Sans $3" >/dev/null 2>&1 &
+	fit
 	exit 0
 fi
 
 case "${1:-toggle}" in
-show) pkill -USR2 -x -u "$(id -u)" "$OSK" ;;
+show) pkill -USR2 -x -u "$(id -u)" "$OSK"; fit ;;
 hide) pkill -USR1 -x -u "$(id -u)" "$OSK" ;;
-*) pkill -RTMIN -x -u "$(id -u)" "$OSK" ;;
+*) pkill -RTMIN -x -u "$(id -u)" "$OSK"; fit ;;
 esac
 exit 0

@@ -1,0 +1,24 @@
+#!/usr/bin/python3
+"""gbook-fit-active — keep the active window clear of the on-screen keyboard.
+
+wvkbd reserves its height as an exclusive zone, but labwc only fits maximized
+windows into the remaining area; a window that merely fills the screen stays
+under the keyboard (seen with Firefox: the input line was hidden). gbook-osk
+runs this whenever it shows the keyboard: the active window is maximized
+unless it already is or runs full screen (games, video). It stays maximized
+after the keyboard is gone, which suits a tablet.
+"""
+import sys
+sys.path.insert(0, "/usr/local/lib/gbook")
+try:
+    import gbook_toplevel as gt
+except Exception as e:                     # bindings missing: do nothing
+    print("gbook-fit-active:", e, file=sys.stderr)
+    sys.exit(0)
+
+w = gt.Windows()
+t = w.active()
+if t is not None and gt.MAXIMIZED not in t.states and gt.FULLSCREEN not in t.states:
+    t.handle.set_maximized()
+    w.flush()
+gt.leave()

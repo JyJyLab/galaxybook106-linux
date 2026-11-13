@@ -1,0 +1,26 @@
+#!/bin/bash
+# gbook-hibernate-setup — swap file for hibernation + resume settings. Run as root.
+# zram stays the normal swap (higher priority); /swapfile (pri -2) only holds
+# the hibernation image. Idempotent.
+set -euo pipefail
+SWAP=/swapfile
+SIZE_MB=${GB_HIBERNATE_SWAP_MB:-4608}   # RAM 4 GB (3.7 usable) + margin
+if [ ! -e "$SWAP" ]; then
+	fallocate -l "${SIZE_MB}M" "$SWAP"
+	chmod 600 "$SWAP"
+	mkswap -L hibernate "$SWAP" >/dev/null
+fi
+grep -q "^$SWAP " /etc/fstab || echo "$SWAP none swap sw,pri=-2 0 0" >>/etc/fstab
+swapon --show=NAME --noheadings 2>/dev/null | grep -qx "$SWAP" || swapon -p -2 "$SWAP"
+uuid=$(findmnt -no UUID -T "$SWAP")
+offset=$(filefrag -v "$SWAP" | awk '$1=="0:"{gsub(/\.\./,"",$4); print $4; exit}')
+[ -n "$uuid" ] && [ -n "$offset" ] || { echo "cannot find swap file location" >&2; exit 1; }
+params="resume=UUID=$uuid resume_offset=$offset"
+if ! grep -q "resume_offset=$offset" /etc/default/grub; then
+	sed -i -E 's/ ?resume=[^" ]*//; s/ ?resume_offset=[^" ]*//' /etc/default/grub
+	sed -i -E "s|^GRUB_CMDLINE_LINUX=\"([^\"]*)\"|GRUB_CMDLINE_LINUX=\"\\1 $params\"|; s|=\" |=\"|" /etc/default/grub
+	update-grub
+fi
+echo "RESUME=UUID=$uuid" >/etc/initramfs-tools/conf.d/resume
+update-initramfs -u
+echo "hibernation: $SWAP, $params"

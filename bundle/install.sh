@@ -9,7 +9,7 @@
 #   desktop  rotation helpers + labwc config for the Xfce Wayland session
 #   greetd   automatic login into the Xfce Wayland session
 #   cover    keyboard cover touchpad helper (experimental, not in "all"; see cover/)
-#   power    sleep on power button and cover close (logind), charger no wake source
+#   power    sleep on power button and cover close (logind), hibernate after 3 h, charger no wake source
 #   camera   front camera: IMX241 kernel modules (DKMS), libcamera with IMX241,
 #            ImgU IOMMU fix, PipeWire and Firefox settings
 #   all      accel audio desktop greetd power camera
@@ -149,7 +149,15 @@ install_desktop() {
 		"$HERE/desktop/bin/gbook-session" "$HERE/desktop/bin/gbook-osk" \
 		"$HERE/desktop/bin/gbook-panel-setup" "$HERE/desktop/bin/gbook-osd" \
 		"$HERE/desktop/bin/gbook-touch-calibrate" "$HERE/desktop/bin/gbook-osk-auto" \
-		/usr/local/bin/
+		"$HERE/desktop/bin/gbook-fit-active" /usr/local/bin/
+	# Firefox: system title bar, so the window can be moved by touch
+	[ -d /etc/firefox-esr ] && install -m 644 "$HERE/desktop/firefox/gbook.js" /etc/firefox-esr/gbook.js
+	# window list bindings for gbook-fit-active (keyboard must not cover the active window)
+	apt_install python3-pywayland libwayland-dev
+	install -d /usr/local/lib/gbook
+	install -m 644 "$HERE/desktop/lib/gbook_toplevel.py" /usr/local/lib/gbook/
+	python3 "$HERE/desktop/lib/gen-protocols.py" /usr/local/lib/gbook \
+		"$HERE/desktop/protocols/wlr-foreign-toplevel-management-unstable-v1.xml"
 	# on-screen keyboard with Korean labels and a Hangul/English key (osk/README)
 	if [ "$(dpkg --print-architecture)" = amd64 ] && [ -f "$HERE/osk/wvkbd-gbook" ]; then
 		install -m 755 "$HERE/osk/wvkbd-gbook" /usr/local/bin/wvkbd-gbook
@@ -230,6 +238,12 @@ install_power() {
 	install -D -m 644 "$HERE/power/10-gbook.conf" /etc/systemd/logind.conf.d/10-gbook.conf
 	install -D -m 644 "$HERE/power/90-gbook-power.rules" /etc/udev/rules.d/90-gbook-power.rules
 	install -m 755 "$HERE/power/gbook-power-setup" /usr/local/bin/gbook-power-setup
+	# sleep, then hibernate after three hours (no S0ix on this tablet)
+	install -D -m 644 "$HERE/power/20-gbook-hibernate.conf" /etc/systemd/sleep.conf.d/20-gbook-hibernate.conf
+	install -m 755 "$HERE/power/gbook-hibernate-setup" /usr/local/sbin/gbook-hibernate-setup
+	/usr/local/sbin/gbook-hibernate-setup
+	install -D -m 755 "$HERE/power/gbook-vbtn-resume" /usr/lib/systemd/system-sleep/gbook-vbtn-resume
+	install -D -m 755 "$HERE/power/gbook-thermald-resume" /usr/lib/systemd/system-sleep/gbook-thermald-resume
 	# xfce4-power-manager must leave the power button and the cover to logind
 	# (gbook-power-setup explains why). New account: settings file; running
 	# session: set the values through xfconf.
@@ -283,7 +297,8 @@ install_camera() {
 	# 2. the IPU3 imaging unit must not sit behind IOMMU translation (machine hang)
 	install -D -m 755 "$HERE/camera/gbook-imgu-identity" /usr/local/sbin/gbook-imgu-identity
 	install -D -m 644 "$HERE/camera/gbook-imgu.conf" /etc/modprobe.d/gbook-imgu.conf
-	# 3. libcamera 0.7.2 with the IMX241 sensor helper (local build, held)
+	# 3. libcamera 0.7.2 with the IMX241 sensor helper and colour tuning from the
+	#    Windows module data (local build gbook10, held)
 	if [ "$(dpkg --print-architecture)" = amd64 ]; then
 		DEBIAN_FRONTEND=noninteractive apt-get install -y --no-install-recommends --allow-downgrades --allow-change-held-packages \
 			"$HERE"/camera/debs/*.deb || warn "libcamera packages could not be installed"

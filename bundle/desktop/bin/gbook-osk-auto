@@ -19,12 +19,20 @@ The same program keeps the labels of the on-screen keyboard (wvkbd-gbook) in
 step with the input method: Korean labels while fcitx5 is in "hangul",
 Latin labels otherwise (signals SIGRTMIN+2 / SIGRTMIN+1).
 
+A tap on the screen (touch or pen) while a text field still has the focus
+shows the keyboard again if it was hidden (the "▼" key of wvkbd-gbook hides
+it without moving the focus, so no focus change would bring it back). The
+keyboard is known to be hidden from $XDG_RUNTIME_DIR/wvkbd-gbook.visible,
+which wvkbd-gbook writes. Only taps that begin while the keyboard is hidden
+count, so a tap on the keyboard itself (its hide key) never brings it back.
+
 State changes are written to ~/.local/state/gbook-osk-auto.log.
 """
 import argparse
 import glob
 import os
 import signal
+import struct
 import subprocess
 import sys
 import time
@@ -35,6 +43,9 @@ gi.require_version("Gio", "2.0")
 from gi.repository import Gio, GLib  # noqa: E402
 
 KEY_ENTER, KEY_A, KEY_Z, KEY_SPACE = 28, 30, 44, 57
+EV_KEY, BTN_TOUCH, INPUT_PROP_DIRECT = 1, 330, 1
+EVENT = struct.Struct("llHHi")             # struct input_event (64-bit)
+TAP_CHECK_MS = 250                         # let the tap move the focus first
 BUS_I8042 = 0x11
 FOCUS_POLL_MS = 400          # only while no hardware keyboard is connected
 KEYBOARD_POLL_S = 2
@@ -74,6 +85,38 @@ def hardware_keyboards():
     return sorted(names)
 
 
+def direct_touch_devices():
+    """Event nodes of touchscreens and pens (INPUT_PROP_DIRECT + BTN_TOUCH)."""
+    nodes = []
+    for props in glob.glob("/sys/class/input/input*/properties"):
+        device = os.path.dirname(props)
+        try:
+            with open(props) as f:
+                if not int(f.read().split()[-1], 16) >> INPUT_PROP_DIRECT & 1:
+                    continue
+            bits = 0
+            with open(device + "/capabilities/key") as f:
+                for word in f.read().split():
+                    bits = (bits << 64) | int(word, 16)
+            if not bits >> BTN_TOUCH & 1:
+                continue
+        except (OSError, ValueError, IndexError):
+            continue
+        for ev in glob.glob(device + "/event*"):
+            nodes.append("/dev/input/" + os.path.basename(ev))
+    return sorted(nodes)
+
+
+def keyboard_visible():
+    path = os.path.join(os.environ.get("XDG_RUNTIME_DIR", "/run/user/%d" % os.getuid()),
+                        "wvkbd-gbook.visible")
+    try:
+        with open(path) as f:
+            return f.read().strip() == "1"
+    except OSError:
+        return None                     # older wvkbd or not started: unknown
+
+
 class AutoKeyboard:
     def __init__(self, assume_detached, verbose):
         self.assume_detached = assume_detached
@@ -91,7 +134,12 @@ class AutoKeyboard:
         self.korean = None           # label language last sent to it
         self.polls = 0
         self.keyboard_polls = 0
+        self.taps = {}               # event node -> (fd, watch id)
+        self.tap_pending = False
+        self.down_hidden = False     # keyboard was hidden when the touch began
         self.log("start" + (" (assume detached)" if assume_detached else ""))
+        self.open_touch_devices()
+        GLib.timeout_add_seconds(10, self.open_touch_devices)
         self.check_keyboards()
         GLib.timeout_add_seconds(KEYBOARD_POLL_S, self.check_keyboards)
 
@@ -199,6 +247,66 @@ class AutoKeyboard:
             # keyboard shown by hand while a hardware keyboard is connected
             self.sync_language(force=True)
         return True
+
+    # -- taps on a field that keeps the focus ------------------------------
+    def open_touch_devices(self):
+        for node in direct_touch_devices():
+            if node in self.taps:
+                continue
+            try:
+                fd = os.open(node, os.O_RDONLY | os.O_NONBLOCK)
+            except OSError as e:
+                self.log("cannot read %s: %s" % (node, e.strerror))
+                self.taps[node] = (-1, 0)
+                continue
+            watch = GLib.unix_fd_add_full(GLib.PRIORITY_DEFAULT, fd, GLib.IOCondition.IN |
+                                          GLib.IOCondition.HUP | GLib.IOCondition.ERR,
+                                          self.on_touch, node)
+            self.taps[node] = (fd, watch)
+            self.log("watching taps on " + node)
+        return True
+
+    def on_touch(self, fd, condition, node):
+        if condition & (GLib.IOCondition.HUP | GLib.IOCondition.ERR):
+            os.close(fd)
+            del self.taps[node]          # unplugged: opened again by the rescan
+            return False
+        released = False
+        try:
+            while True:
+                data = os.read(fd, EVENT.size * 64)
+                if not data:
+                    break
+                for i in range(0, len(data) - EVENT.size + 1, EVENT.size):
+                    _, _, typ, code, value = EVENT.unpack_from(data, i)
+                    if typ == EV_KEY and code == BTN_TOUCH:
+                        if value == 1:
+                            # state when the finger lands: a tap that starts on
+                            # the keyboard (e.g. its hide key) never counts
+                            self.down_hidden = keyboard_visible() is False
+                        elif value == 0 and self.down_hidden:
+                            released = True
+                            self.down_hidden = False
+        except BlockingIOError:
+            pass
+        except OSError:
+            os.close(fd)
+            del self.taps[node]
+            return False
+        if released and self.focus_timer and not self.tap_pending:
+            self.tap_pending = True
+            GLib.timeout_add(TAP_CHECK_MS, self.after_tap)
+        return True
+
+    def after_tap(self):
+        self.tap_pending = False
+        if self.detached() and keyboard_visible() is False and self.text_focus():
+            self.log("show (focused field tapped while hidden)")
+            self.focus = True
+            self.misses = 0
+            self.osk("show")
+            self.shown = True
+        return False
 
     # -- text focus ------------------------------------------------------
     def text_focus(self):

@@ -1,0 +1,15 @@
+#!/bin/sh
+# /usr/lib/systemd/system-sleep/gbook-thermald-resume — Galaxy Book 10.6
+# After resuming from hibernation thermald 2.5.13 (--adaptive) kept one thread
+# in a busy loop from the moment of resume (2026-11-12: 100 % of a core,
+# 11-15 W instead of about 7 W, package 78 C, battery 67 -> 31 % in 35
+# minutes). Restarting the service stopped it. Restart it after every resume
+# from hibernation.
+[ "$1" = post ] || exit 0
+case "$2:${SYSTEMD_SLEEP_ACTION:-}" in
+	hibernate:*|*:hibernate) ;;
+	*) exit 0 ;;
+esac
+systemctl --no-block try-restart thermald.service 2>/dev/null &&
+	logger -t gbook-thermald "restarted thermald after hibernation"
+exit 0

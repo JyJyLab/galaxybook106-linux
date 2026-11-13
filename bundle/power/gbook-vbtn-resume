@@ -1,0 +1,19 @@
+#!/bin/sh
+# /usr/lib/systemd/system-sleep/gbook-vbtn-resume — Galaxy Book 10.6
+# After resuming from hibernation (HibernateMode=shutdown: the firmware starts
+# cold) the power button of "Intel Virtual Buttons" (INT33D6) sent nothing to
+# logind until intel-vbtn was rebound (2026-11-11, suspected; the probe enables
+# the device with VBDL). Rebind it after every resume from hibernation.
+[ "$1" = post ] || exit 0
+case "$2:${SYSTEMD_SLEEP_ACTION:-}" in
+	hibernate:*|*:hibernate) ;;
+	*) exit 0 ;;
+esac
+D=/sys/bus/platform/drivers/intel-vbtn
+for dev in /sys/bus/acpi/devices/INT33D6:*/physical_node; do
+	[ -e "$dev" ] || continue
+	name=$(basename "$(readlink -f "$dev")")
+	echo "$name" >"$D/unbind" 2>/dev/null
+	echo "$name" >"$D/bind" 2>/dev/null && logger -t gbook-vbtn "rebound $name after hibernation"
+done
+exit 0

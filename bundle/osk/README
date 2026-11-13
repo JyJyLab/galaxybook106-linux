@@ -1,12 +1,20 @@
 wvkbd-gbook — on-screen keyboard with a Korean layer for the Galaxy Book bundle
 
 wvkbd-gbook is wvkbd 0.15 (Debian forky source, layout "mobintl") built with
-wvkbd-0.15-korean.patch:
+wvkbd-0.15-gbook.patch:
 
   * layer "korean": the full layout with 2-set Hangul labels. It sends the same
     key codes as the Latin layer; fcitx5 (hangul) composes the syllables.
   * key "한/영" on both layers: sends the Hangul key (toggles the input method
     in fcitx5) and switches the labels at once.
+  * key "▼" (hide, last key of the bottom row on the Latin, Korean, special
+    and nav layers; space key one unit narrower): hides the keyboard like
+    SIGUSR1 and sends nothing to the application. gbook-osk-auto shows it again
+    at the next text focus (added 2026-11-11: the keyboard stayed on screen and
+    the panel toggle was hard to hit by touch).
+  * visibility file $XDG_RUNTIME_DIR/wvkbd-gbook.visible ("1"/"0", written
+    on show/hide): gbook-osk-auto shows the keyboard again when a focused
+    field is tapped while the keyboard is hidden.
   * signals SIGRTMIN+1 (Latin labels) and SIGRTMIN+2 (Korean labels):
     gbook-osk-auto sends them so that the labels follow the input method even
     when it is switched somewhere else (keyboard cover, tray icon, other
@@ -17,9 +25,10 @@ Rebuild (Debian forky, e.g. in a chroot):
   apt-get install gcc make pkg-config libc6-dev libwayland-dev \
       libxkbcommon-dev libpango1.0-dev wayland-protocols
   apt-get source wvkbd            # or wvkbd_0.15.orig.tar.xz from the pool
-  cd wvkbd-0.15 && patch -p1 < ../wvkbd-0.15-korean.patch && make
+  cd wvkbd-0.15 && patch -p1 < ../wvkbd-0.15-gbook.patch && make clean && make
   strip wvkbd-mobintl && cp wvkbd-mobintl wvkbd-gbook
 
-The binary in this directory was built that way on 2026-11-10 (amd64) and
+The binary in this directory was built that way on 2026-11-11 on the tablet (amd64;
+`make clean` is needed after layout changes — the Makefile does not track the layout header for main.o) and
 needs the libraries of the Debian package wvkbd (libwayland-client0,
 libpangocairo-1.0-0, libcairo2).
