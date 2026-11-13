@@ -38,7 +38,7 @@ SM-W627NZKFKOO(LTE 모델) 실기 기준. SM-W620(Wi-Fi 모델)은 미검증 —
 
 ### 1. USB 메모리 만들기
 
-[Releases](../../releases)에서 `galaxybook106-linux-installer-<날짜>.img.xz.001`, `.002`, `SHA256SUMS`를 받음(GitHub 파일당 2 GB 제한으로 분할).
+설치 이미지 릴리스 [v2026.11.10](../../releases/tag/v2026.11.10)에서 `galaxybook106-linux-installer-<날짜>.img.xz.001`, `.002`, `SHA256SUMS`를 받음(GitHub 파일당 2 GB 제한으로 분할). 이후 릴리스는 업데이트 묶음 — 설치 후 [최신 변경 적용](#최신-변경-적용-2026-11-10-이미지로-설치한-경우) 참고.
 
 리눅스:
 
@@ -154,6 +154,6 @@ Unofficial Debian forky build for the Samsung Galaxy Book 10.6 (SM-W627 LTE veri
 
 - Working: graphics and VA-API, auto-rotation (accelerometer glue module), touch and S Pen aligned with the rotation, speakers and headphone jack, volume/power buttons, on-screen keyboard that pops up when the keyboard cover is detached (Korean 2-set layer), sleep on power button and lid with hibernation after 3 hours, Wi-Fi, Bluetooth, front camera (new Sony IMX241 driver, patched libcamera with colour tuning converted from the Windows camera module data — lens shading, colour matrices, AWB locus — works in Firefox, mirrored by default).
 - Known issues: keyboard cover touchpad stays dead after hot re-attach (one suspend/resume fixes it); camera DKMS module builds for 7.2 kernels only; LTE modem, GPS and ambient light sensor unsupported.
-- Install: join the release parts (`cat *.img.xz.0* > installer.img.xz`), decompress, write to a USB stick, disable Secure Boot (F2), boot it (F10), run `gbook-install`. **This erases the whole internal eMMC, Windows included.** The installer asks for the password of the desktop user `gbook`; the desktop logs in automatically.
+- Install: from release v2026.11.10, join the release parts (`cat *.img.xz.0* > installer.img.xz`), decompress, write to a USB stick, disable Secure Boot (F2), boot it (F10), run `gbook-install`. **This erases the whole internal eMMC, Windows included.** The installer asks for the password of the desktop user `gbook`; the desktop logs in automatically.
 - Build it yourself: `install/build-rootfs.sh` then `live/make-usb.sh`.
 - Updates after the 2026-11-10 image (hibernation, on-screen keyboard improvements, thermald fix after resume, camera colour tuning): clone this repository and run `sudo bundle/install.sh desktop power camera`, then reboot.
