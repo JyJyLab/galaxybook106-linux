@@ -91,13 +91,15 @@ Windows: 7-Zip으로 `.001` 파일을 열면 분할본이 합쳐져 `.img`가 �
 
 ```sh
 git clone https://github.com/JyJyLab/galaxybook106-linux && cd galaxybook106-linux
-sudo bundle/install.sh desktop power camera    # 또는 all
+sudo bundle/install.sh audio desktop power camera    # 또는 all
 sudo rm -rf /opt/gbook/bundle && sudo cp -a bundle /opt/gbook/bundle   # 기기 안 원본도 갱신(선택)
 ```
 재부팅 후 반영. 카메라를 쓰는 앱은 재시작(또는 `systemctl --user restart pipewire wireplumber`).
 
 ## 변경 기록
 
+- **2026-11-23**
+  - 절전·최대 절전에서 복귀한 뒤 스피커 소리가 나지 않는 문제 → 음향 복귀 훅을 systemd가 실제로 실행하는 `/usr/lib/systemd/system-sleep/`로 옮김(이전 위치 `/etc/systemd/system-sleep/`는 systemd가 읽지 않아 복귀 후 앰프 초기화가 한 번도 실행되지 않았음). 적용: `sudo bundle/install.sh audio`. 당장 소리를 살리려면 `sudo galaxybook-audio-init 0`
 - **2026-11-13**
   - 전면 카메라 색 보정: libcamera 0.7.2-1+gbook10. Windows 드라이버의 카메라 모듈 특성 데이터(Intel AIQB)를 해독해 IPU3 처리에 적용 — 색온도별 렌즈 음영 보정, 색 보정 행렬, 화이트밸런스 궤적, sRGB 출력. 흑 레벨·음영 이득 형식은 실기 측정으로 확정. 이전의 청록빛·뿌연 화면·어두운 모서리 해소. 자세한 내용 [camera/README.md](camera/README.md)
   - 최대 절전에서 복귀하면 thermald가 CPU 한 코어를 계속 점유해 배터리가 빨리 닳는 문제 → 복귀 시 thermald 재시작(`gbook-thermald-resume`)
@@ -156,4 +158,5 @@ Unofficial Debian forky build for the Samsung Galaxy Book 10.6 (SM-W627 LTE veri
 - Known issues: keyboard cover touchpad stays dead after hot re-attach (one suspend/resume fixes it); camera DKMS module builds for 7.2 kernels only; LTE modem, GPS and ambient light sensor unsupported.
 - Install: from release v2026.11.10, join the release parts (`cat *.img.xz.0* > installer.img.xz`), decompress, write to a USB stick, disable Secure Boot (F2), boot it (F10), run `gbook-install`. **This erases the whole internal eMMC, Windows included.** The installer asks for the password of the desktop user `gbook`; the desktop logs in automatically.
 - Build it yourself: `install/build-rootfs.sh` then `live/make-usb.sh`.
-- Updates after the 2026-11-10 image (hibernation, on-screen keyboard improvements, thermald fix after resume, camera colour tuning): clone this repository and run `sudo bundle/install.sh desktop power camera`, then reboot.
+- Updates after the 2026-11-10 image (hibernation, on-screen keyboard improvements, thermald fix after resume, camera colour tuning): clone this repository and run `sudo bundle/install.sh audio desktop power camera`, then reboot.
+- 2026-11-23: no speaker sound after resuming from sleep/hibernation — the audio resume hook was installed to `/etc/systemd/system-sleep/`, which systemd-sleep never reads; it now goes to `/usr/lib/systemd/system-sleep/` (`sudo bundle/install.sh audio`; immediate fix `sudo galaxybook-audio-init 0`).

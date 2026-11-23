@@ -113,13 +113,17 @@ install_audio() {
 	say "audio initialisation (ALC298 144d:c150)"
 	local up="$HERE/audio/upstream"
 	apt_install alsa-tools python3
-	install -d -m 755 /usr/local/lib/galaxybook-audio /usr/local/bin /etc/systemd/system-sleep
+	install -d -m 755 /usr/local/lib/galaxybook-audio /usr/local/bin /usr/lib/systemd/system-sleep
 	install -m 755 "$up/scripts/initializeALC298.py" "$up/scripts/setHeadphone.py" "$up/scripts/amp_replay.py" /usr/local/lib/galaxybook-audio/
 	install -m 644 "$up/scripts/verbUI.py" "$up/scripts/amp_ops.json" /usr/local/lib/galaxybook-audio/
 	install -m 755 "$up/bin/galaxybook-audio-init" "$up/bin/galaxybook-jack-watch" /usr/local/bin/
 	install -m 755 "$HERE/audio/gbook-audio-check" /usr/local/bin/gbook-audio-check
 	install -m 644 "$up/systemd/galaxybook-audio.service" "$up/systemd/galaxybook-jack-watch.service" /etc/systemd/system/
-	install -m 755 "$HERE/audio/galaxybook-audio.sleep" /etc/systemd/system-sleep/galaxybook-audio
+	# systemd-sleep only runs hooks from /usr/lib/systemd/system-sleep; older bundles
+	# put this one in /etc/systemd/system-sleep where it never ran after resume
+	install -m 755 "$HERE/audio/galaxybook-audio.sleep" /usr/lib/systemd/system-sleep/galaxybook-audio
+	rm -f /etc/systemd/system-sleep/galaxybook-audio
+	rmdir /etc/systemd/system-sleep 2>/dev/null || true
 	local unit
 	for unit in galaxybook-audio.service galaxybook-jack-watch.service; do
 		install -d -m 755 "/etc/systemd/system/$unit.d"
